@@ -1,0 +1,5 @@
+[package]
+name = "vblock"
+version = "0.1.0"
+authors = ["Cody P Schafer <dev@codyps.com>"]
+description = "Varible Length Block Store"
