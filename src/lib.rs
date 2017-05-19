@@ -1,3 +1,4 @@
+/*
 use std::io::Write;
 
 /// Provides a mechanism to split blocks given 
@@ -24,7 +25,7 @@ impl Spliter {
 }
 
 impl Write for Splitter {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> ::std::io::Result<usize> {
         /* Iterate over the concatenation of scan_buffer's valid bytes and all of buf looking for
          * the termination condition to occur. If we find the termination condition, return early
          */
@@ -32,12 +33,14 @@ impl Write for Splitter {
         Ok(buf.len())
     }
 
-    fn flush(&mut self) -> Result<()>
+    fn flush(&mut self) -> ::std::io::Result<()>
     {
         Ok(())
     }
 }
+*/
 
 #[test]
 fn it_works() {
 }
+
