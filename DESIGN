@@ -1,0 +1,14 @@
+
+# Find where to split blocks
+
+## Keywords & Terms:
+ - "N events into B buckets"
+ - "Chunking"
+ - "Content Defined Chunking"
+ - "variable length blocks"
+ - "Rolling hash"
+ - "Incremental Hash"
+
+# Store split blocks to files
+
+# Store records that allow block re-assembly
