@@ -1,4 +1,44 @@
 /*
+//extern crate fs_at;
+extern crate sodalite;
+
+pub use std::io::Result;
+
+/// A location that is either occupied or unoccupied.
+///
+/// Occupation status may change rather quickly, 
+pub struct Entry<'a> {
+    p: &'a Store,
+    k: Key,
+}
+
+impl Entry {
+    pub fn
+}
+
+pub struct Store {
+    base: fs_at::Dir,
+}
+
+impl Store {
+    pub fn with_dir(d: fs_at::Dir) -> Self {
+        Store {
+            base: d
+        }
+    }
+
+    pub fn store(&self, data: &[u8]) -> Result<usize>
+    {
+    }
+
+    pub fn entry(&self, key: &str) -> Result<Entry>
+    {
+
+    }
+}
+*/
+
+/*
 use std::io::Write;
 
 /// Provides a mechanism to split blocks given 
