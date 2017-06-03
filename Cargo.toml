@@ -8,3 +8,7 @@ description = "Varible Length Block Store"
 hash-roll = { path = "../hash-roll", version = "0.2" }
 clap = "2.24"
 rand = "0.3"
+openat = { path = "../openat", version = "0.1" }
+
+[dev-dependencies]
+tempdir = "0.3"
