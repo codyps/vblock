@@ -7,9 +7,11 @@ use std::ffi::{CString,CStr};
 //extern crate sodalite;
 
 mod fs;
+use std::io::Read;
 use fs::DirVblockExt;
 use std::io::Write;
 use std::io;
+use openat::Dir;
 
 pub struct Store {
     base: openat::Dir,
@@ -97,6 +99,20 @@ impl Store {
         &self.base
     }
 
+    fn object_dir(&self, key: &Oid) -> io::Result<Dir> {
+        // TODO: consider allowing configurable levels for key-splitting.
+        let l = 3;
+        let mut d = Vec::with_capacity(l);
+        d.push(self.base.create_dir_open(&key.get_part(0))?);
+
+        for i in 1..l {
+            let n = d[i-1].create_dir_open(&key.get_part(i))?;
+            d.push(n);
+        }
+
+        d[d.len()-1].create_dir_open(&key.get_part_rem(l))
+    }
+
     /// TODO: consider multi-(name,data) API
     /// TODO: consider data being sourced incrimentally
     ///
@@ -109,25 +125,17 @@ impl Store {
         let t = self.base.tempdir("vblock-temp.")?;
         let mut f = t.create_file(key, 0o666)?;
         f.write_all(data)?;
-
-        // TODO: consider allowing configurable levels for key-splitting.
-        let l = 3;
-        let mut d = Vec::with_capacity(l);
-        d.push(self.base.create_dir_open(&key.get_part(0))?);
-
-        for i in 1..l {
-            let n = d[i-1].create_dir_open(&key.get_part(i))?;
-            d.push(n);
-        }
-
-        let d_f = d[d.len()-1].create_dir_open(&key.get_part_rem(l))?;
-
-        ::openat::rename(&t, key, &d_f, name)?;
+        let d = self.object_dir(key)?;
+        ::openat::rename(&t, key, &d, name)?;
         Ok(())
     }
 
     /// TODO: consider data being read inrementally
-    pub fn get_object(&self, key: &str, name: &str) -> io::Result<Vec<u8>> {
-        unimplemented!()
+    pub fn get_object(&self, key: &Oid, name: &str) -> io::Result<Vec<u8>> {
+        let d = self.object_dir(key)?;
+        let mut b = vec![];
+        let mut f = d.open_file(name)?;
+        f.read_to_end(&mut b)?;
+        Ok(b)
     }
 }

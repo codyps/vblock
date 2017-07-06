@@ -66,9 +66,18 @@ fn po() {
     let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
     let oid = vblock::Oid::from_hex("0123456789").expect("failed to construct Oid");
     s.put_object(&oid, "this-name", b"data").expect("failed to insert object");
-    println!("{}", PrintDirRec::new(s.dir(), CString::new(&b"."[..]).unwrap().as_ref()));
     let mut f = s.dir().open_file(CString::new(b"0/1/2/3456789/this-name".as_ref()).unwrap().as_ref()).expect("could not open data file");
     let mut d = vec![];
     f.read_to_end(&mut d).expect("reading data failed");
-    assert_eq!(d, b"data")
+    assert_eq!(d, b"data");
+}
+
+#[test]
+fn rt() {
+    let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
+    let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
+    let oid = vblock::Oid::from_hex("0123456789").expect("failed to construct Oid");
+    s.put_object(&oid, "this-name", b"data").expect("failed to insert object");
+    let d = s.get_object(&oid, "this-name").expect("getting object failed");
+    assert_eq!(d, b"data");
 }
