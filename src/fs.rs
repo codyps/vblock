@@ -130,20 +130,49 @@ mod test {
 
     #[test]
     fn create_open_concurrent_race() {
+        use ::std::os::unix::ffi::OsStrExt;
         for _ in 0..500 {
             let tdb = tempdir::TempDir::new(module_path!()).unwrap();
             let mut join = vec![];
-            for _ in 0 ..8 {
+            for i in 0..10 {
                 let b = tdb.path().to_owned();
                 join.push(::std::thread::spawn(move || {
                     let mut d = ::openat::Dir::open(&b).unwrap();
                     // TODO: check that if we create a file with the thread number as the file
                     // name, at the end all exist.
-                    check!(d.create_dir_open("a"));
+                    let d2 = check!(d.create_dir_open("a"));
+                    let n = format!("{}", i);
+                    let n2: &str = n.as_ref();
+                    d2.create_file(n2, 0o666).unwrap();
                 }));
             }
 
             join.drain(..).map(|join| join.join().unwrap()).count();
+
+            let mut d = ::openat::Dir::open(tdb.path()).unwrap();
+            let mut found = [false;10];
+            for e in d.list_dir("a").unwrap() {
+                let e = e.unwrap();
+                let fna = e.file_name().as_bytes();
+                let fna = String::from_utf8(fna.to_owned()).unwrap();
+                let n = match fna.parse::<usize>() {
+                    Ok(v) => v,
+                    Err(e) => {
+                        panic!("{:?} is not an integer: {:?}", fna, e);
+                    }
+                };
+                if found[n] {
+                    panic!("found {} twice", n);
+                }
+
+                found[n] = true;
+            }
+
+            for (n, f) in found[..].iter().enumerate() {
+                if !f {
+                    panic!("did not find {}", n);
+                }
+            }
         }
     }
 }

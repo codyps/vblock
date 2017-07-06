@@ -106,7 +106,7 @@ impl Store {
     {
         // TODO: encapsulate logic around tempdir, tempfiles, and renaming to allow us to be cross
         // platform.
-        let t = self.base.tempdir("vblock")?;
+        let t = self.base.tempdir("vblock-temp.")?;
         let mut f = t.create_file(key, 0o666)?;
         f.write_all(data)?;
 
