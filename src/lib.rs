@@ -110,7 +110,7 @@ impl Store {
         let mut f = t.create_file(key, 0o666)?;
         f.write_all(data)?;
 
-        /// TODO: consider allowing configurable levels for key-splitting.
+        // TODO: consider allowing configurable levels for key-splitting.
         let l = 3;
         let mut d = Vec::with_capacity(l);
         d.push(self.base.create_dir_open(&key.get_part(0))?);
