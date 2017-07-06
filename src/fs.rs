@@ -1,3 +1,6 @@
+use ::std::ffi::CString;
+use ::openat::Dir;
+
 fn to_cstr<P: ::openat::AsPath>(path: P) -> ::std::io::Result<P::Buffer> {
     path.to_path()
     .ok_or_else(|| {
@@ -6,8 +9,27 @@ fn to_cstr<P: ::openat::AsPath>(path: P) -> ::std::io::Result<P::Buffer> {
     })
 }
 
+/*
+struct TempDir {
+    dir: Dir,
+    path: CString,
+}
+
+impl TempDir {
+    pub fn as_dir(&self) -> &Dir {
+        &self.dir
+    }
+
+    pub fn path(&self) -> &CStr {
+        
+    }
+}
+*/
+
 pub trait DirVblockExt {
     fn create_dir_open<P: ::openat::AsPath>(&self, path: P) -> ::std::io::Result<Self>
+        where Self: Sized;
+    fn tempdir<P: ::openat::AsPath>(&self, prefix: P) -> ::std::io::Result<Self>
         where Self: Sized;
 }
 
@@ -42,6 +64,23 @@ impl DirVblockExt for ::openat::Dir {
             Ok(d1) => Ok(d1),
         }
     }
+
+    fn tempdir<P: ::openat::AsPath>(&self, prefix: P) -> ::std::io::Result<Self>
+    {
+        let n = tempdir_name(prefix); 
+        self.create_dir_open(n.as_ref())
+    }
+}
+
+// -> impl ::openat::AsPath
+fn tempdir_name<P: ::openat::AsPath>(prefix: P) -> CString
+{
+    use ::rand::Rng;
+    // FIXME: ideally, we'd avoid converting to cstring & then back again. Can optimize this.
+    let mut path = to_cstr(prefix).unwrap().as_ref().to_bytes().to_owned();
+    path.reserve(10);
+    path.extend(::rand::thread_rng().gen_ascii_chars().take(10).map(|x| x as u8));
+    CString::new(path).unwrap()
 }
 
 #[cfg(test)]
@@ -98,6 +137,8 @@ mod test {
                 let b = tdb.path().to_owned();
                 join.push(::std::thread::spawn(move || {
                     let mut d = ::openat::Dir::open(&b).unwrap();
+                    // TODO: check that if we create a file with the thread number as the file
+                    // name, at the end all exist.
                     check!(d.create_dir_open("a"));
                 }));
             }
