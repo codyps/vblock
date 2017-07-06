@@ -1,5 +1,5 @@
 use ::std::ffi::CString;
-use ::openat::Dir;
+//use ::openat::Dir;
 
 fn to_cstr<P: ::openat::AsPath>(path: P) -> ::std::io::Result<P::Buffer> {
     path.to_path()
@@ -137,7 +137,7 @@ mod test {
             for i in 0..10 {
                 let b = tdb.path().to_owned();
                 join.push(::std::thread::spawn(move || {
-                    let mut d = ::openat::Dir::open(&b).unwrap();
+                    let d = ::openat::Dir::open(&b).unwrap();
                     // TODO: check that if we create a file with the thread number as the file
                     // name, at the end all exist.
                     let d2 = check!(d.create_dir_open("a"));
@@ -149,7 +149,8 @@ mod test {
 
             join.drain(..).map(|join| join.join().unwrap()).count();
 
-            let mut d = ::openat::Dir::open(tdb.path()).unwrap();
+            // Confirm file creation
+            let d = ::openat::Dir::open(tdb.path()).unwrap();
             let mut found = [false;10];
             for e in d.list_dir("a").unwrap() {
                 let e = e.unwrap();

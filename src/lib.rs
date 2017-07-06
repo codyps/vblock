@@ -1,6 +1,7 @@
 extern crate openat;
 extern crate rand;
 extern crate hex;
+extern crate sodalite;
 
 use std::ffi::{CString,CStr};
 
@@ -13,6 +14,13 @@ use std::io::Write;
 use std::io;
 use openat::Dir;
 
+/// 
+///
+/// Contains `Object`s identified by an object-id (`Oid`). Objects may contain 1 or more "values"
+/// stored to different files, each with a given `name`.
+///
+/// `Piece`s are a type of object which have an `Oid` corresponding to the hash of their contents.
+/// `Piece`s make up other types of things stored.
 pub struct Store {
     base: openat::Dir,
 }
@@ -50,6 +58,12 @@ impl Oid {
         Oid {
             inner: ::std::ffi::CString::new(::hex::ToHex::to_hex(&key)).unwrap()
         }
+    }
+
+    pub fn from_data(data: &[u8]) -> Self {
+        let mut key = [0u8;sodalite::HASH_LEN];
+        sodalite::hash(&mut key, data);
+        Oid::from_bytes(&key[..])
     }
 
     /// TODO: this is very Index like, see if we can make that usable.
@@ -137,5 +151,10 @@ impl Store {
         let mut f = d.open_file(name)?;
         f.read_to_end(&mut b)?;
         Ok(b)
+    }
+
+    pub fn put_piece(&self, data: &[u8]) -> io::Result<()>
+    {
+        self.put_object(&Oid::from_data(data), "piece", data)
     }
 }

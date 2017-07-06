@@ -61,7 +61,7 @@ impl<'a> ::std::fmt::Display for PrintDirRec<'a> {
 }
 
 #[test]
-fn po() {
+fn object_put() {
     let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
     let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
     let oid = vblock::Oid::from_hex("0123456789").expect("failed to construct Oid");
@@ -73,11 +73,27 @@ fn po() {
 }
 
 #[test]
-fn rt() {
+fn object_round_trip() {
     let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
     let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
     let oid = vblock::Oid::from_hex("0123456789").expect("failed to construct Oid");
     s.put_object(&oid, "this-name", b"data").expect("failed to insert object");
     let d = s.get_object(&oid, "this-name").expect("getting object failed");
     assert_eq!(d, b"data");
+}
+
+#[test]
+fn piece_put() {
+    let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
+    let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
+    s.put_piece(b"hi").unwrap();
+}
+
+#[test]
+fn piece_round_trip() {
+    let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
+    let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
+    s.put_piece(b"hi").expect("putting piece failed");
+    let d = s.get_object(&vblock::Oid::from_data(b"hi"), "piece").expect("getting piece failed");
+    assert_eq!(d, b"hi");
 }
