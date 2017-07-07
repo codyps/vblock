@@ -2,7 +2,9 @@ extern crate openat;
 extern crate rand;
 extern crate hex;
 extern crate sodalite;
+extern crate hash_roll;
 
+use hash_roll::Split2;
 use std::ffi::{CString,CStr};
 
 //extern crate sodalite;
@@ -153,8 +155,44 @@ impl Store {
         Ok(b)
     }
 
-    pub fn put_piece(&self, data: &[u8]) -> io::Result<()>
+    pub fn put_piece(&self, data: &[u8]) -> io::Result<Oid>
     {
-        self.put_object(&Oid::from_data(data), "piece", data)
+        // TODO: verify data if object already exists
+        let oid = Oid::from_data(data);
+        self.put_object(&oid, "piece", data)?;
+        Ok(oid)
+    }
+
+    /// A blob is a list of pieces. That list is then also split into pieces (recursively)
+    ///
+    /// The Oid of a blob is the overall hash of the data, which simply contains the Oid of the
+    /// top-level piece of the list of pieces.
+    ///
+    /// TODO: avoid needing the entire blob in memory at once. Use a streaming style api here.
+    pub fn put_blob(&self, data: &[u8]) -> io::Result<Oid>
+    {
+        let oid = Oid::from_data(data);
+
+        // build an object containing a list of pieces
+        let mut pieces = vec![];
+
+        let mut hr = hash_roll::bup::BupBuf::default();
+
+        let mut data = data;
+        while data.len() > 0 {
+            let used = hr.push(data);
+            let used = if used == 0 {
+                data.len()
+            } else {
+                used
+            };
+            let oid = Oid::from_data(&data[..used]);
+            self.put_object(&oid, "piece", data)?;
+            pieces.push((oid, used));
+            data = &{data}[used..];
+        }
+
+        // TODO: store list of pieces with blob Oid.
+        Ok(oid)
     }
 }

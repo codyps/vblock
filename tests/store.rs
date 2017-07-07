@@ -1,6 +1,8 @@
 extern crate tempdir;
 extern crate openat;
 extern crate vblock;
+extern crate rand;
+extern crate quickcheck;
 
 use openat::Dir;
 use std::ffi::{CStr, CString};
@@ -96,4 +98,22 @@ fn piece_round_trip() {
     s.put_piece(b"hi").expect("putting piece failed");
     let d = s.get_object(&vblock::Oid::from_data(b"hi"), "piece").expect("getting piece failed");
     assert_eq!(d, b"hi");
+}
+
+#[test]
+fn piece_put_twice() {
+    let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
+    let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
+    s.put_piece(b"hi").unwrap();
+    s.put_piece(b"hi").unwrap();
+}
+
+#[test]
+fn blob_put() {
+    fn prop(data: Vec<u8>) -> bool {
+        let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
+        let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
+        s.put_blob(&data[..]).is_ok()
+    }
+    quickcheck::quickcheck(prop as fn(Vec<u8>) -> bool)
 }
