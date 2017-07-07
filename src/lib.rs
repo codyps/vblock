@@ -35,6 +35,7 @@ pub struct Store {
 // FIXME: we really want this to be both a series of bytes & a cstr.
 //  - CStr is used for file paths
 //  - bytes are used for file contents
+#[derive(Debug,Eq,PartialEq,Clone)]
 pub struct Oid {
     inner: ::std::ffi::CString,
 }
@@ -66,9 +67,9 @@ impl Oid {
         }
     }
 
-    pub fn from_data(data: &[u8]) -> Self {
+    pub fn from_data<A: AsRef<[u8]>>(data: A) -> Self {
         let mut key = [0u8;sodalite::HASH_LEN];
-        sodalite::hash(&mut key, data);
+        sodalite::hash(&mut key, data.as_ref());
         Oid::from_bytes(&key[..])
     }
 
@@ -163,6 +164,16 @@ impl Store {
         Ok(b)
     }
 
+    pub fn get_piece(&self, key: &Oid) -> io::Result<Vec<u8>> {
+        let o = self.get_object(key, "piece")?;
+        let calc_key = Oid::from_data(&o);
+        if &calc_key != key {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece {:?} is corrupt, has key {:?}",
+                                                                          key, calc_key)));
+        }
+        Ok(o)
+    }
+
     pub fn put_piece<A: AsRef<[u8]>>(&self, data: A) -> io::Result<Oid>
     {
         // TODO: verify data if object already exists
@@ -227,7 +238,7 @@ impl Store {
     pub fn get_blob(&self, oid: &Oid) -> io::Result<Vec<u8>>
     {
         let pieces_oid = Oid::from_bytes(self.get_object(oid, "blob")?);
-        let pieces = self.get_object(&pieces_oid, "piece")?; 
+        let pieces = self.get_piece(&pieces_oid)?; 
         let mut p = &pieces[..];
         let mut data = vec![];
         loop {
@@ -256,7 +267,7 @@ impl Store {
 
             let oid = Oid::from_bytes(&p[4..(4+64)]);
 
-            data.extend(self.get_object(&oid, "piece")?);
+            data.extend(self.get_piece(&oid)?);
 
             p = &{p}[(4+64+8)..]
         }
