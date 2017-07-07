@@ -117,3 +117,24 @@ fn blob_put() {
     }
     quickcheck::quickcheck(prop as fn(Vec<u8>) -> bool)
 }
+
+#[test]
+fn blob_round_trip() {
+    fn prop(data: Vec<u8>) -> bool {
+        let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
+        let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
+        
+        let oid = match s.put_blob(&data[..]) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+
+        let rt_data = match s.get_blob(&oid) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+
+        data == rt_data 
+    }
+    quickcheck::quickcheck(prop as fn(Vec<u8>) -> bool)
+}

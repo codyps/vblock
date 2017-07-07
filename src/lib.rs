@@ -31,6 +31,10 @@ pub struct Store {
 ///
 /// Very much like git, every object in a vblock store has a identifier that corresponds to it's
 /// value.
+///
+// FIXME: we really want this to be both a series of bytes & a cstr.
+//  - CStr is used for file paths
+//  - bytes are used for file contents
 pub struct Oid {
     inner: ::std::ffi::CString,
 }
@@ -55,7 +59,7 @@ impl Oid {
         })
     }
 
-    pub fn from_bytes(key: &[u8]) -> Self {
+    pub fn from_bytes<A: AsRef<[u8]>>(key: A) -> Self {
         // TODO: instead of converting & allocating, provide a view in hex?
         Oid {
             inner: ::std::ffi::CString::new(::hex::ToHex::to_hex(&key)).unwrap()
@@ -78,6 +82,10 @@ impl Oid {
     fn get_part_rem(&self, index_start: usize) -> OidPart {
         let v = &self.inner.as_bytes()[index_start..];
         OidPart { inner: CString::new(v).unwrap() }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        ::hex::FromHex::from_hex(&self.inner.as_bytes()).unwrap()
     }
 }
 
@@ -155,9 +163,10 @@ impl Store {
         Ok(b)
     }
 
-    pub fn put_piece(&self, data: &[u8]) -> io::Result<Oid>
+    pub fn put_piece<A: AsRef<[u8]>>(&self, data: A) -> io::Result<Oid>
     {
         // TODO: verify data if object already exists
+        let data = data.as_ref();
         let oid = Oid::from_data(data);
         self.put_object(&oid, "piece", data)?;
         Ok(oid)
@@ -169,6 +178,8 @@ impl Store {
     /// top-level piece of the list of pieces.
     ///
     /// TODO: avoid needing the entire blob in memory at once. Use a streaming style api here.
+    ///
+    ///
     pub fn put_blob(&self, data: &[u8]) -> io::Result<Oid>
     {
         let oid = Oid::from_data(data);
@@ -186,13 +197,69 @@ impl Store {
             } else {
                 used
             };
-            let oid = Oid::from_data(&data[..used]);
-            self.put_object(&oid, "piece", data)?;
-            pieces.push((oid, used));
+            let oid = self.put_piece(data)?;
+            pieces.extend(&[
+                // entry_len: u16 // 64 + 8 = 72
+                72, 0,
+                // kind: u16      // 1 = (oid: [u8;64], len: u64)
+                1,  0,
+            ][..]);
+            pieces.extend(oid.to_bytes());
+            pieces.extend(&[
+                used as u8,
+                (used >> 8) as u8,
+                (used >> 16) as u8,
+                (used >> 24) as u8,
+                (used >> 32) as u8,
+                (used >> 40) as u8,
+                (used >> 48) as u8,
+                (used >> 56) as u8
+            ][..]);
             data = &{data}[used..];
         }
 
-        // TODO: store list of pieces with blob Oid.
+        // FIXME: pieces should also be split.
+        let p_oid = self.put_piece(pieces)?;
+        self.put_object(&oid, "blob", &p_oid.to_bytes()[..])?;
         Ok(oid)
     }
+
+    pub fn get_blob(&self, oid: &Oid) -> io::Result<Vec<u8>>
+    {
+        let pieces_oid = Oid::from_bytes(self.get_object(oid, "blob")?);
+        let pieces = self.get_object(&pieces_oid, "piece")?; 
+        let mut p = &pieces[..];
+        let mut data = vec![];
+        loop {
+            if p.len() == 0 {
+                return Ok(data)
+            }
+
+            if p.len() < 4 {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{} spare bytes too small for header", p.len())));
+            }
+
+            let elen = p[0] as u16 | ((p[1] as u16) << 8);
+            if elen != 72 {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry length is {} instead of 72", elen)));
+            }
+
+            let kind = p[2] as u16 | ((p[3] as u16) << 8);
+            if kind != 1 {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry kind is {} instead of 1", kind)))
+            }
+
+            if p.len() < elen as usize {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry len {} is not provided by piece desc which has {} bytes left",
+                                                                              elen, p.len())));
+            }
+
+            let oid = Oid::from_bytes(&p[4..(4+64)]);
+
+            data.extend(self.get_object(&oid, "piece")?);
+
+            p = &{p}[(4+64+8)..]
+        }
+    }
 }
+
