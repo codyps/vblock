@@ -68,16 +68,16 @@ pub enum Kind {
 impl Kind {
     fn raw(&self) -> u64 {
         match *self {
-            Kind::Blob =>  1,
-            Kind::Piece => 2,
+            Kind::Piece => 1,
+            Kind::Blob =>  2,
             Kind::Tree  => 3,
         }
     }
 
     fn from_bytes(d: &[u8]) -> io::Result<Self> {
         match byteorder::LittleEndian::read_u64(&d[..]) {
-            1 => Ok(Kind::Blob),
-            2 => Ok(Kind::Piece),
+            1 => Ok(Kind::Piece),
+            2 => Ok(Kind::Blob),
             3 => Ok(Kind::Tree),
             e => Err(io::Error::new(io::ErrorKind::InvalidData, format!("kind {:?} is invalid", e))),
         }
@@ -261,13 +261,17 @@ impl Store {
                     data.len()
                 }
             } else {
-                used
+                if used == data.len() && pieces.len() == 0 {
+                    return self.put_object(Kind::Piece, data);
+                } else {
+                    used
+                }
             };
 
             let oid = self.put_object(Kind::Piece, data)?;
             pieces.extend(&[
-                // entry_len: u16 // 64 + 8 = 72
-                72, 0,
+                // entry_len: u16 // 4 + 64 + 8 = 76
+                76, 0,
                 // kind: u16      // 1 = (oid: [u8;64], len: u64)
                 1,  0,
             ][..]);
@@ -301,13 +305,16 @@ impl Store {
         match o.kind() {
             Kind::Blob => {
                 // resolve other items
-                let mut p = [0u8;72];
+                let mut p = [0u8;76];
                 loop {
-                    o.read(&mut p)?;
+                    let l = o.read(&mut p)?;
+                    if l != 76 {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry read is {} instead of 76", l)));
+                    }
 
                     let elen = p[0] as u16 | ((p[1] as u16) << 8);
-                    if elen != 72 {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry length is {} instead of 72", elen)));
+                    if elen != 76 {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry length is {} instead of 76", elen)));
                     }
 
                     let kind = p[2] as u16 | ((p[3] as u16) << 8);

@@ -75,12 +75,12 @@ fn object_put() {
     s.put_object(vblock::Kind::Piece, b"data").expect("failed to insert object");
     println!("{}", PrintDirRec::new(s.dir(), CStr::from_bytes_with_nul(b".\0").unwrap()));
     let oid = CStr::from_bytes_with_nul(
-        b"d/3/6/a/af8dfbdd29b994a6bca0968a662c681001bb93f2257199cc9e2c1c8fb41d129ec9b5689d6e0309cae3566f5ccd40728b0a5a7d0c2b0ae67e754d00b6899d\0"
+        b"5/e/7/3/a68dec8dd148419b366b51ae24332b62aed50fcb9a0c8f759cde90394db7e73ccc6eb08f86534bece2439a07723bbc5619b116681a0b563455e53e45651b\0"
     ).unwrap();
     let mut f = s.dir().open_file(oid).expect("could not open data file");
     let mut d = vec![];
     f.read_to_end(&mut d).expect("reading data failed");
-    assert_eq!(&d[0..8], &[2,0,0,0,0,0,0,0]);
+    assert_eq!(&d[0..8], &[1,0,0,0,0,0,0,0]);
     assert_eq!(&d[8..], b"data");
 }
 
@@ -136,6 +136,11 @@ fn blob_rt<A: AsRef<[u8]>>(a: A)
 #[test]
 fn blob_round_trip_1() {
     blob_rt(&[44, 42, 6, 37, 83, 73, 23, 6, 10, 21, 13, 37, 21, 29, 74, 63, 78, 70, 42, 67, 87, 26, 61, 79, 90, 4, 62, 99, 47, 96, 62, 63, 33, 5, 17, 67, 5, 69, 66, 92, 8, 10, 60, 14, 42, 40, 38, 33, 11, 78, 25, 42, 65, 54, 28, 72, 77, 62, 87, 39, 90, 61, 78, 85][..]);
+}
+
+#[test]
+fn blob_round_trip_2() {
+    blob_rt(&[66, 30, 21, 7, 69, 39, 93, 16, 4, 70, 62, 14, 83, 98, 38, 33, 86, 0, 98, 16, 84, 82, 31, 11, 99, 70, 72, 91, 62, 52, 0][..]);
 }
 
 #[test]
