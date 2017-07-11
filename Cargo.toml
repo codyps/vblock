@@ -5,7 +5,7 @@ authors = ["Cody P Schafer <dev@codyps.com>"]
 description = "Varible Length Block Store"
 
 [dependencies]
-hash-roll = { path = "../hash-roll", version = "0.2" }
+hash-roll = { git = "https://github.com/jmesmon/hash-roll", version = "0.2" }
 clap = "2"
 rand = "0.3"
 openat = "0.1"

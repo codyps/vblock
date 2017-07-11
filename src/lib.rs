@@ -8,14 +8,14 @@ extern crate byteorder;
 use byteorder::ByteOrder;
 use hash_roll::Split2;
 use std::ffi::{CString,CStr};
-
-//extern crate sodalite;
+use std::io::Seek;
 
 mod fs;
 use std::io::Read;
 use fs::DirVblockExt;
 use std::io::Write;
 use std::io;
+use std::io::Cursor;
 use openat::{Dir,DirIter};
 
 /// Contains `Object`s identified by an object-id (`Oid`). Objects may contain 1 or more "values"
@@ -25,6 +25,10 @@ use openat::{Dir,DirIter};
 /// `Piece`s make up other types of things stored.
 ///
 /// `Blob`s are a sequence of bytes that are stored as a list of `Piece`s.
+/// 
+/// TODO: right now oids/keys are tied to the disk format, consider allowing oids/keys that are
+/// related by aren't the direct hash of the vblock files. For example, allowing the hash of an
+/// entire file to be tracked may be useful.
 pub struct Store {
     base: openat::Dir,
 }
@@ -68,10 +72,23 @@ impl Kind {
         }
     }
 
+    fn from_bytes(d: &[u8]) -> io::Result<Self> {
+        match byteorder::LittleEndian::read_u64(&d[..]) {
+            1 => Ok(Kind::Blob),
+            2 => Ok(Kind::Piece),
+            3 => Ok(Kind::Tree),
+            e => Err(io::Error::new(io::ErrorKind::InvalidData, format!("kind {:?} is invalid", e))),
+        }
+    }
+
     fn as_bytes(&self) -> [u8;8] {
         let mut x = [0u8;8];
         byteorder::LittleEndian::write_u64(&mut x[..], self.raw());
         x
+    }
+
+    fn len() -> usize {
+        8
     }
 }
 
@@ -102,7 +119,7 @@ impl Oid {
         }
     }
 
-    pub fn from_data<A: AsRef<[u8]>>(data: A) -> Self {
+    fn from_data<A: AsRef<[u8]>>(data: A) -> Self {
         let mut key = [0u8;sodalite::HASH_LEN];
         sodalite::hash(&mut key, data.as_ref());
         Oid::from_bytes(&key[..])
@@ -159,9 +176,14 @@ impl Store {
         &self.base
     }
 
+    fn split_ct(&self) -> usize
+    {
+        4
+    }
+
     fn object_dir(&self, key: &Oid) -> io::Result<Dir> {
         // TODO: consider allowing configurable levels for key-splitting.
-        let l = 3;
+        let l = self.split_ct();
         let mut d = Vec::with_capacity(l);
         d.push(self.base.create_dir_open(&key.get_part(0))?);
 
@@ -175,7 +197,7 @@ impl Store {
 
     fn object_name(&self, key: &Oid) -> OidPart
     {
-        key.get_part_rem(3)
+        key.get_part_rem(self.split_ct())
     }
 
     /// TODO: consider multi-(name,data) API
@@ -183,50 +205,29 @@ impl Store {
     ///
     /// Note: `key` and `name` should only need to be valid `Path` fragments (`OsString`s). The
     /// restriction to `str` here could be lifted if needed.
-    pub fn put_object(&self, key: &Oid, kind: Kind, data: &[u8]) -> io::Result<()>
+    pub fn put_object<A: AsRef<[u8]>>(&self, kind: Kind, data: A) -> io::Result<Oid>
     {
-        // TODO: encapsulate logic around tempdir, tempfiles, and renaming to allow us to be cross
-        // platform.
-        let t = self.base.tempdir("vblock-temp.")?;
-        let mut f = t.create_file(key, 0o666)?;
-        f.write_all(data)?;
-        let d = self.object_dir(key)?;
-        let name = self.object_name(key);
-        ::openat::rename(&t, key, &d, &name)?;
-        Ok(())
+        let mut o = self.put(kind)?;
+        o.write_all(data.as_ref())?;
+        o.commit()
     }
 
-    /// TODO: consider data being read inrementally
-    pub fn get_object(&self, key: &Oid, kind: Kind) -> io::Result<Vec<u8>> {
-        let d = self.object_dir(key)?;
+    pub fn get_object(&self, key: &Oid) -> io::Result<Option<Vec<u8>>> {
+        let mut v = match self.get(key)? {
+            Some(x) => x,
+            None => return Ok(None),
+        };
         let mut b = vec![];
-        let mut f = d.open_file(&self.object_name(key))?;
-        let name = key.get_part_rem(3);
-        f.read_to_end(&mut b)?;
-        Ok(b)
+        v.read_to_end(&mut b)?;
+        Ok(Some(b))
     }
 
-    pub fn put(&'a self) -> ObjectBuilder<'a> {
-        ObjectBuilder::new(self)
+    pub fn put<'a>(&'a self, kind: Kind) -> io::Result<ObjectBuilder<'a>> {
+        ObjectBuilder::new(self, kind)
     }
 
-    pub fn get_piece(&self, key: &Oid) -> io::Result<Vec<u8>> {
-        let o = self.get_object(key, Kind::Piece)?;
-        let calc_key = Oid::from_data(&o);
-        if &calc_key != key {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece {:?} is corrupt, has key {:?}",
-                                                                          key, calc_key)));
-        }
-        Ok(o)
-    }
-
-    pub fn put_piece<A: AsRef<[u8]>>(&self, data: A) -> io::Result<Oid>
-    {
-        // TODO: verify data if object already exists
-        let data = data.as_ref();
-        let oid = Oid::from_data(data);
-        self.put_object(&oid, Kind::Piece, data)?;
-        Ok(oid)
+    pub fn get<'a>(&'a self, oid: &Oid) -> io::Result<Option<Object<'a>>> {
+        Object::from_oid(self, oid.clone())
     }
 
     /// A blob is a list of pieces. That list is then also split into pieces (recursively)
@@ -239,23 +240,29 @@ impl Store {
     ///
     pub fn put_blob(&self, data: &[u8]) -> io::Result<Oid>
     {
-        let oid = Oid::from_data(data);
-
         // build an object containing a list of pieces
         let mut pieces = vec![];
-        pieces.extend(Kind::Blob.as_bytes().iter());
-
         let mut hr = hash_roll::bup::BupBuf::default();
 
         let mut data = data;
+
+        if data.len() == 0 {
+            return self.put_object(Kind::Piece, data);
+        }
+
         while data.len() > 0 {
             let used = hr.push(data);
             let used = if used == 0 {
-                data.len()
+                if pieces.len() == 0 {
+                    return self.put_object(Kind::Piece, data);
+                } else {
+                    data.len()
+                }
             } else {
                 used
             };
-            let oid = self.put_piece(data)?;
+
+            let oid = self.put_object(Kind::Piece, data)?;
             pieces.extend(&[
                 // entry_len: u16 // 64 + 8 = 72
                 72, 0,
@@ -277,47 +284,56 @@ impl Store {
         }
 
         // FIXME: pieces should also be split.
-        let p_oid = self.put_piece(pieces)?;
-        self.put_object(&oid, Kind::Piece, &p_oid.to_bytes()[..])?;
-        Ok(oid)
+        self.put_object(Kind::Blob, pieces)
     }
 
-    pub fn get_blob(&self, oid: &Oid) -> io::Result<Vec<u8>>
+    // TODO: logically, this should probably be handled by Object or similar directly, and allow us
+    // to seek & so forth.
+    pub fn get_blob(&self, oid: &Oid) -> io::Result<Option<Vec<u8>>>
     {
-        let pieces_oid = Oid::from_bytes(self.get_object(oid, Kind::Blob)?);
-        let pieces = self.get_piece(&pieces_oid)?; 
-        let mut p = &pieces[..];
+        let mut o = match self.get(oid)? {
+                Some(v) => v, None => return Ok(None),
+        };
+
         let mut data = vec![];
-        loop {
-            if p.len() == 0 {
-                return Ok(data)
+        match o.kind() {
+            Kind::Blob => {
+                // resolve other items
+                let mut p = [0u8;72];
+                loop {
+                    o.read(&mut p)?;
+
+                    let elen = p[0] as u16 | ((p[1] as u16) << 8);
+                    if elen != 72 {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry length is {} instead of 72", elen)));
+                    }
+
+                    let kind = p[2] as u16 | ((p[3] as u16) << 8);
+                    if kind != 1 {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry kind is {} instead of 1", kind)))
+                    }
+
+                    let soid = Oid::from_bytes(&p[4..(4+64)]);
+
+                    let p = match self.get_blob(&soid)? {
+                        Some(v) => v,
+                        None => return Err(io::Error::new(io::ErrorKind::InvalidData,
+                                            format!("piece {:?} is missing for object {:?}", soid, oid))),
+                    };
+
+                    data.extend(p);
+                }
+            },
+            Kind::Piece => {
+                // direct data
+                o.read_to_end(&mut data)?;
+            },
+            Kind::Tree => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{:?} has Kind::Tree, not allowed", oid)));
             }
-
-            if p.len() < 4 {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, format!("{} spare bytes too small for header", p.len())));
-            }
-
-            let elen = p[0] as u16 | ((p[1] as u16) << 8);
-            if elen != 72 {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry length is {} instead of 72", elen)));
-            }
-
-            let kind = p[2] as u16 | ((p[3] as u16) << 8);
-            if kind != 1 {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry kind is {} instead of 1", kind)))
-            }
-
-            if p.len() < elen as usize {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, format!("piece entry len {} is not provided by piece desc which has {} bytes left",
-                                                                              elen, p.len())));
-            }
-
-            let oid = Oid::from_bytes(&p[4..(4+64)]);
-
-            data.extend(self.get_piece(&oid)?);
-
-            p = &{p}[(4+64+8)..]
         }
+
+        Ok(Some(data))
     }
 
     pub fn objects<'a>(&'a self) -> ObjectIter<'a>
@@ -330,26 +346,119 @@ pub struct ObjectBuilder<'a> {
     parent: &'a Store,
     kind: Kind,
 
-    file: 
+    // FIXME: tempdir should really be something that will remove itself.
+    // Or we could just use tempfiles in a fixed-name directory.
+    // FIXME: right now we allow tempdir to continue to exist. Need cleanup mechanism.
+    tempdir: Dir,
+
+    // FIXME: right now we leak the on-disk File when no commit occurs.
+    file: ::std::fs::File,
+
+    // FIXME: send data directly to file, hash progressively. Or hash speculatively if WriteAt &
+    // Seek are needed.
+    data: Vec<u8>,
 }
 
-impl ObjectBuilder {
-    
+impl<'a> ObjectBuilder<'a> {
+    fn new(parent: &'a Store, kind: Kind) -> io::Result<Self>
+    {
+        // TODO: encapsulate logic around tempdir, tempfiles, and renaming to allow us to be cross
+        // platform.
+        let t = parent.base.tempdir("vblock-temp.")?;
+        let f = t.create_file("new-object", 0o666)?;
 
+        let mut x = ObjectBuilder {
+            parent: parent,
+            kind: kind,
+            tempdir: t,
+            file: f,
+            data: Vec::with_capacity(Kind::len()),
+        };
+        x.data.extend(x.kind.as_bytes().iter());
+        Ok(x)
+    }
 
-    fn commit(self) -> io::Result<Oid> {
-        
+    fn commit(mut self) -> io::Result<Oid> {
+        let oid = Oid::from_data(&self.data);
+        self.file.write_all(&self.data[..])?;
+        let d = self.parent.object_dir(&oid)?;
+        let name = self.parent.object_name(&oid);
+        ::openat::rename(&self.tempdir, "new-object", &d, &name)?;
+        Ok(oid)
+    }
+}
+
+impl<'a> std::io::Write for ObjectBuilder<'a> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize>
+    {
+        self.data.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()>
+    {
+        self.data.flush()
     }
 }
     
+/// An object that exists in the `Store`
 pub struct Object<'a> {
     parent: &'a Store,
     oid: Oid,
+    kind: Kind,
+    
+    // Consider if we even need this. May be better just to use cached value, which we read on
+    // creation anyhow to check hash.
+    file: Cursor<Vec<u8>>,
 }
 
 impl<'a> Object<'a> {
+    fn from_oid(parent: &'a Store, oid: Oid) -> io::Result<Option<Self>> {
+        let d = parent.object_dir(&oid)?;
+        let mut f = match d.open_file(&parent.object_name(&oid)) {
+            Err(e) => {
+                return match e.kind() {
+                    io::ErrorKind::NotFound => Ok(None),
+                    _ => Err(e)
+                }
+            },
+            Ok(v) => v,
+        };
+
+        let mut b = vec![];
+        f.read_to_end(&mut b)?;
+        f.seek(io::SeekFrom::Start(Kind::len() as u64))?;
+
+        let calc_key = Oid::from_data(&b);
+        if calc_key != oid {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece {:?} is corrupt, has calculated oid {:?}",
+                                                                            oid, calc_key)));
+        }
+
+        let kind = Kind::from_bytes(&b)?;
+        let mut c = Cursor::new(b);
+        c.set_position(8);
+
+        Ok(Some(Object {
+            parent: parent,
+            oid: oid,
+            kind: kind,
+            file: c,
+        }))
+    }
+
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
     pub fn oid(&self) -> &Oid {
         &self.oid
+    }
+}
+
+impl<'a> std::io::Read for Object<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>
+    {
+        self.file.read(buf)
     }
 }
 
