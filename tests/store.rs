@@ -67,8 +67,9 @@ fn object_put() {
     let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
     let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
     let oid = vblock::Oid::from_hex("0123456789").expect("failed to construct Oid");
-    s.put_object(&oid, "this-name", b"data").expect("failed to insert object");
-    let mut f = s.dir().open_file(CString::new(b"0/1/2/3456789/this-name".as_ref()).unwrap().as_ref()).expect("could not open data file");
+    s.put_object(&oid, vblock::Kind::Piece, b"data").expect("failed to insert object");
+    println!("{}", PrintDirRec::new(s.dir(), CStr::from_bytes_with_nul(b".\0").unwrap()));
+    let mut f = s.dir().open_file(CString::new(b"0/1/2/3456789".as_ref()).unwrap().as_ref()).expect("could not open data file");
     let mut d = vec![];
     f.read_to_end(&mut d).expect("reading data failed");
     assert_eq!(d, b"data");
@@ -79,8 +80,8 @@ fn object_round_trip() {
     let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
     let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
     let oid = vblock::Oid::from_hex("0123456789").expect("failed to construct Oid");
-    s.put_object(&oid, "this-name", b"data").expect("failed to insert object");
-    let d = s.get_object(&oid, "this-name").expect("getting object failed");
+    s.put_object(&oid, vblock::Kind::Piece, b"data").expect("failed to insert object");
+    let d = s.get_object(&oid, vblock::Kind::Piece).expect("getting object failed");
     assert_eq!(d, b"data");
 }
 
@@ -96,7 +97,7 @@ fn piece_round_trip() {
     let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
     let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
     s.put_piece(b"hi").expect("putting piece failed");
-    let d = s.get_object(&vblock::Oid::from_data(b"hi"), "piece").expect("getting piece failed");
+    let d = s.get_object(&vblock::Oid::from_data(b"hi"), vblock::Kind::Piece).expect("getting piece failed");
     assert_eq!(d, b"hi");
 }
 
@@ -116,6 +117,16 @@ fn blob_put() {
         s.put_blob(&data[..]).is_ok()
     }
     quickcheck::quickcheck(prop as fn(Vec<u8>) -> bool)
+}
+
+#[test]
+fn blob_round_trip_empty() {
+    let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
+    let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
+    let oid = s.put_blob(&[]).unwrap();
+    let rt_data = s.get_blob(&oid).unwrap();
+    let e: &[u8] = &[];
+    assert_eq!(e,&rt_data[..]);
 }
 
 #[test]

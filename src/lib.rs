@@ -3,7 +3,9 @@ extern crate rand;
 extern crate hex;
 extern crate sodalite;
 extern crate hash_roll;
+extern crate byteorder;
 
+use byteorder::ByteOrder;
 use hash_roll::Split2;
 use std::ffi::{CString,CStr};
 
@@ -14,15 +16,15 @@ use std::io::Read;
 use fs::DirVblockExt;
 use std::io::Write;
 use std::io;
-use openat::Dir;
+use openat::{Dir,DirIter};
 
-/// 
-///
 /// Contains `Object`s identified by an object-id (`Oid`). Objects may contain 1 or more "values"
 /// stored to different files, each with a given `name`.
 ///
 /// `Piece`s are a type of object which have an `Oid` corresponding to the hash of their contents.
 /// `Piece`s make up other types of things stored.
+///
+/// `Blob`s are a sequence of bytes that are stored as a list of `Piece`s.
 pub struct Store {
     base: openat::Dir,
 }
@@ -38,6 +40,39 @@ pub struct Store {
 #[derive(Debug,Eq,PartialEq,Clone)]
 pub struct Oid {
     inner: ::std::ffi::CString,
+}
+
+/// Data stored has a given kind which controls it's interpretation
+#[derive(Debug,Eq,PartialEq,Clone,Copy)]
+pub enum Kind {
+    /// Actual data, a plain sequence of bytes which has no further meaning to vblock.
+    // XXX: consider name here, everything kind of a piece.
+    Piece,
+
+    /// A list of objects (`Blob`s & `Piece`s) which taken together compose a single sequence of
+    /// bytes.
+    Blob,
+
+    /// A single level of a filesystem tree.
+    // XXX: consider multiple levels in 1.
+    // XXX: consider how splitting of large trees is handled.
+    Tree,
+}
+
+impl Kind {
+    fn raw(&self) -> u64 {
+        match *self {
+            Kind::Blob =>  1,
+            Kind::Piece => 2,
+            Kind::Tree  => 3,
+        }
+    }
+
+    fn as_bytes(&self) -> [u8;8] {
+        let mut x = [0u8;8];
+        byteorder::LittleEndian::write_u64(&mut x[..], self.raw());
+        x
+    }
 }
 
 impl Oid {
@@ -130,12 +165,17 @@ impl Store {
         let mut d = Vec::with_capacity(l);
         d.push(self.base.create_dir_open(&key.get_part(0))?);
 
-        for i in 1..l {
+        for i in 1..(l-1) {
             let n = d[i-1].create_dir_open(&key.get_part(i))?;
             d.push(n);
         }
 
-        d[d.len()-1].create_dir_open(&key.get_part_rem(l))
+        d[l-2].create_dir_open(&key.get_part(l-1))
+    }
+
+    fn object_name(&self, key: &Oid) -> OidPart
+    {
+        key.get_part_rem(3)
     }
 
     /// TODO: consider multi-(name,data) API
@@ -143,7 +183,7 @@ impl Store {
     ///
     /// Note: `key` and `name` should only need to be valid `Path` fragments (`OsString`s). The
     /// restriction to `str` here could be lifted if needed.
-    pub fn put_object(&self, key: &Oid, name: &str, data: &[u8]) -> io::Result<()>
+    pub fn put_object(&self, key: &Oid, kind: Kind, data: &[u8]) -> io::Result<()>
     {
         // TODO: encapsulate logic around tempdir, tempfiles, and renaming to allow us to be cross
         // platform.
@@ -151,21 +191,27 @@ impl Store {
         let mut f = t.create_file(key, 0o666)?;
         f.write_all(data)?;
         let d = self.object_dir(key)?;
-        ::openat::rename(&t, key, &d, name)?;
+        let name = self.object_name(key);
+        ::openat::rename(&t, key, &d, &name)?;
         Ok(())
     }
 
     /// TODO: consider data being read inrementally
-    pub fn get_object(&self, key: &Oid, name: &str) -> io::Result<Vec<u8>> {
+    pub fn get_object(&self, key: &Oid, kind: Kind) -> io::Result<Vec<u8>> {
         let d = self.object_dir(key)?;
         let mut b = vec![];
-        let mut f = d.open_file(name)?;
+        let mut f = d.open_file(&self.object_name(key))?;
+        let name = key.get_part_rem(3);
         f.read_to_end(&mut b)?;
         Ok(b)
     }
 
+    pub fn put(&'a self) -> ObjectBuilder<'a> {
+        ObjectBuilder::new(self)
+    }
+
     pub fn get_piece(&self, key: &Oid) -> io::Result<Vec<u8>> {
-        let o = self.get_object(key, "piece")?;
+        let o = self.get_object(key, Kind::Piece)?;
         let calc_key = Oid::from_data(&o);
         if &calc_key != key {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece {:?} is corrupt, has key {:?}",
@@ -179,7 +225,7 @@ impl Store {
         // TODO: verify data if object already exists
         let data = data.as_ref();
         let oid = Oid::from_data(data);
-        self.put_object(&oid, "piece", data)?;
+        self.put_object(&oid, Kind::Piece, data)?;
         Ok(oid)
     }
 
@@ -197,6 +243,7 @@ impl Store {
 
         // build an object containing a list of pieces
         let mut pieces = vec![];
+        pieces.extend(Kind::Blob.as_bytes().iter());
 
         let mut hr = hash_roll::bup::BupBuf::default();
 
@@ -231,13 +278,13 @@ impl Store {
 
         // FIXME: pieces should also be split.
         let p_oid = self.put_piece(pieces)?;
-        self.put_object(&oid, "blob", &p_oid.to_bytes()[..])?;
+        self.put_object(&oid, Kind::Piece, &p_oid.to_bytes()[..])?;
         Ok(oid)
     }
 
     pub fn get_blob(&self, oid: &Oid) -> io::Result<Vec<u8>>
     {
-        let pieces_oid = Oid::from_bytes(self.get_object(oid, "blob")?);
+        let pieces_oid = Oid::from_bytes(self.get_object(oid, Kind::Blob)?);
         let pieces = self.get_piece(&pieces_oid)?; 
         let mut p = &pieces[..];
         let mut data = vec![];
@@ -247,7 +294,7 @@ impl Store {
             }
 
             if p.len() < 4 {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{} spare bytes too small for header", p.len())));
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, format!("{} spare bytes too small for header", p.len())));
             }
 
             let elen = p[0] as u16 | ((p[1] as u16) << 8);
@@ -261,7 +308,7 @@ impl Store {
             }
 
             if p.len() < elen as usize {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry len {} is not provided by piece desc which has {} bytes left",
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, format!("piece entry len {} is not provided by piece desc which has {} bytes left",
                                                                               elen, p.len())));
             }
 
@@ -272,5 +319,107 @@ impl Store {
             p = &{p}[(4+64+8)..]
         }
     }
+
+    pub fn objects<'a>(&'a self) -> ObjectIter<'a>
+    {
+        ObjectIter::new(self)
+    }
 }
 
+pub struct ObjectBuilder<'a> {
+    parent: &'a Store,
+    kind: Kind,
+
+    file: 
+}
+
+impl ObjectBuilder {
+    
+
+
+    fn commit(self) -> io::Result<Oid> {
+        
+    }
+}
+    
+pub struct Object<'a> {
+    parent: &'a Store,
+    oid: Oid,
+}
+
+impl<'a> Object<'a> {
+    pub fn oid(&self) -> &Oid {
+        &self.oid
+    }
+}
+
+pub struct ObjectIter<'a> {
+    parent: &'a Store,
+    iters: Vec<DirIter>,
+    dirs: Vec<Dir>,
+}
+
+impl<'a> ObjectIter<'a> {
+    fn new(parent: &'a Store) -> Self
+    {
+        ObjectIter {
+            parent: parent,
+            dirs: vec![],
+            iters: vec![],
+        }
+    }
+
+    /*
+    fn next_inner(&mut self) -> io::Result<Option<Object<'a>>> {
+        let cd = if iters.empty() {
+            self.iters.push(self.parent.list_dir()?);
+            self.parent.dir()
+        } else {
+            self.dirs.last().unwrap();
+        }
+
+        loop {
+            let iter = self.iters.last().unwrap();
+            let n = self.iters.len() - 1;
+            match iter.next() {
+                Some(Ok(v)) => {
+                    match v.simple_type() {
+                        Some(SimpleType::Dir) => {
+                            /* Go deeper */
+                            let nd = cd.sub_dir(v.file_name())?;
+                            let ndi = nd.list_dir()?;
+                            self.iters.push(ndi);
+                            self.dirs.push(nd);
+                            continue;
+                        },
+
+                        Some(SimpleType::File) => {
+                            // Could be an object
+
+                        }
+
+                        Some(_),None => {
+                            // TODO: probe further, but for now assume we don't care and should look at
+                            // the next entry.
+                        }
+                    }
+                },
+                Some(Err(e)) => {
+
+                },
+                None => {
+
+                }
+            }
+        }
+    }
+    */
+}
+
+impl<'a> Iterator for ObjectIter<'a> {
+    type Item = io::Result<Object<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        unimplemented!();
+    }
+}
