@@ -18,13 +18,15 @@ use std::io;
 use std::io::Cursor;
 use openat::{Dir,DirIter};
 
-/// Contains `Object`s identified by an object-id (`Oid`). Objects may contain 1 or more "values"
-/// stored to different files, each with a given `name`.
+/// Contains `Object`s identified by an object-id (`Oid`). Objects all have a Kind and have zero or
+/// more bytes of data. `Oid`s are the hash of the `kind + data` of the object.
+/// 
+/// The `Kind` of an object defines the interpretation of the object's bytes.
 ///
-/// `Piece`s are a type of object which have an `Oid` corresponding to the hash of their contents.
-/// `Piece`s make up other types of things stored.
+/// A `Piece` is the most basic type of object. Its data is just bytes, with no vblock level
+/// interpretation.
 ///
-/// `Blob`s are a sequence of bytes that are stored as a list of `Piece`s.
+/// `Blob`s contain a list of `Oid`s which refer to other `Blob`s or to `Pieces`.
 /// 
 /// TODO: right now oids/keys are tied to the disk format, consider allowing oids/keys that are
 /// related by aren't the direct hash of the vblock files. For example, allowing the hash of an
