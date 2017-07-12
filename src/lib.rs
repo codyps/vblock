@@ -239,7 +239,12 @@ impl Store {
     ///
     /// TODO: avoid needing the entire blob in memory at once. Use a streaming style api here.
     ///
-    ///
+    /// XXX:
+    ///  - blob formating options: pieces could have markers, or blobs could have a bit in the
+    ///    piece entry indicating further deref.
+    ///    
+    ///  - need a concrete model for how recursive blobs work. Ideally, we'd have a tree-like
+    ///    setup, but specifics are needed
     pub fn put_blob(&self, data: &[u8]) -> io::Result<Oid>
     {
         // build an object containing a list of pieces
@@ -248,12 +253,17 @@ impl Store {
 
         let mut data = data;
 
-        if data.len() == 0 {
-            return self.put_object(Kind::Piece, data);
-        }
+        loop {
+            if data.len() == 0 {
+                if pieces.len() == 0 {
+                    return self.put_object(Kind::Piece, data);
+                } else {
+                    break;
+                }
+            }
 
-        while data.len() > 0 {
             let used = hr.push(data);
+
             let used = if used == 0 {
                 if pieces.len() == 0 {
                     return self.put_object(Kind::Piece, data);
@@ -269,23 +279,7 @@ impl Store {
             };
 
             let oid = self.put_object(Kind::Piece, data)?;
-            pieces.extend(&[
-                // entry_len: u16 // 4 + 64 + 8 = 76
-                76, 0,
-                // kind: u16      // 1 = (oid: [u8;64], len: u64)
-                1,  0,
-            ][..]);
-            pieces.extend(oid.to_bytes());
-            pieces.extend(&[
-                used as u8,
-                (used >> 8) as u8,
-                (used >> 16) as u8,
-                (used >> 24) as u8,
-                (used >> 32) as u8,
-                (used >> 40) as u8,
-                (used >> 48) as u8,
-                (used >> 56) as u8
-            ][..]);
+            append_blob_oid(&mut pieces, oid, used);
             data = &{data}[used..];
         }
 
@@ -305,9 +299,14 @@ impl Store {
         match o.kind() {
             Kind::Blob => {
                 // resolve other items
+                // TODO: use the length field
                 let mut p = [0u8;76];
                 loop {
+                    // FIXME: this read() likely needs more checking to catch short reads.
                     let l = o.read(&mut p)?;
+                    if l == 0 {
+                        break;
+                    }
                     if l != 76 {
                         return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry read is {} instead of 76", l)));
                     }
@@ -351,6 +350,29 @@ impl Store {
     }
 }
 
+// TODO: move this into a Blob specific builder
+pub fn append_blob_oid(pieces: &mut Vec<u8>, oid: Oid, used: usize)
+{
+    pieces.extend(&[
+          // entry_len: u16 // 4 + 64 + 8 = 76
+          76, 0,
+          // kind: u16      // 1 = (oid: [u8;64], len: u64)
+          1,  0,
+    ][..]);
+    pieces.extend(oid.to_bytes());
+    pieces.extend(&[
+          used as u8,
+          (used >> 8) as u8,
+          (used >> 16) as u8,
+          (used >> 24) as u8,
+          (used >> 32) as u8,
+          (used >> 40) as u8,
+          (used >> 48) as u8,
+          (used >> 56) as u8
+    ][..]);
+}
+
+
 pub struct ObjectBuilder<'a> {
     parent: &'a Store,
     kind: Kind,
@@ -369,7 +391,7 @@ pub struct ObjectBuilder<'a> {
 }
 
 impl<'a> ObjectBuilder<'a> {
-    fn new(parent: &'a Store, kind: Kind) -> io::Result<Self>
+    pub fn new(parent: &'a Store, kind: Kind) -> io::Result<Self>
     {
         // TODO: encapsulate logic around tempdir, tempfiles, and renaming to allow us to be cross
         // platform.
@@ -387,7 +409,7 @@ impl<'a> ObjectBuilder<'a> {
         Ok(x)
     }
 
-    fn commit(mut self) -> io::Result<Oid> {
+    pub fn commit(mut self) -> io::Result<Oid> {
         let oid = Oid::from_data(&self.data);
         self.file.write_all(&self.data[..])?;
         let d = self.parent.object_dir(&oid)?;

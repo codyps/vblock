@@ -112,6 +112,25 @@ fn blob_put() {
 }
 
 #[test]
+fn blob_get() {
+    let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
+    let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
+
+    let oid1 = s.put_object(vblock::Kind::Piece, b"2").expect("insert object 1 failed");
+    let oid2 = s.put_object(vblock::Kind::Piece, b"3").expect("insert object 2 failed");
+
+    let mut p = vec![];
+    vblock::append_blob_oid(&mut p, oid1, 1);
+    vblock::append_blob_oid(&mut p, oid2, 1);
+
+    let oid_blob = s.put_object(vblock::Kind::Blob, p).expect("insert blob failed");
+    
+    let d = s.get_blob(&oid_blob).expect("get failed").expect("object does not exist");
+
+    assert_eq!(d, b"23");
+}
+
+#[test]
 fn blob_round_trip_empty() {
     let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
     let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
