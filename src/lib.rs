@@ -89,7 +89,7 @@ impl Kind {
         }
     }
 
-    fn as_bytes(&self) -> [u8;8] {
+    pub fn as_bytes(&self) -> [u8;8] {
         let mut x = [0u8;8];
         byteorder::LittleEndian::write_u64(&mut x[..], self.raw());
         x

@@ -132,6 +132,55 @@ fn blob_get() {
 }
 
 #[test]
+fn blob_get_3_level() {
+    let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
+    let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
+
+    // oid_t -> [B oid_1 oid_2] -> [P oid_l1[0], oid_l1[1]] -> "2"
+    //                                                      -> "3"
+    //                          -> [P oid_l2[0], oid_l2[1]] -> "5"
+    //                                                      -> "6"
+    
+    let oid = s.put(vblock::Kind::Blob).unwrap()
+        .append(vblock::Kind::Blob.as_bytes()).unwrap()
+        .append(
+            s.put(vblock::Kind::Piece).unwrap()
+                .append(vblock::Kind::Piece.as_bytes()).unwrap()
+                .append(
+                    s.put(vblock::Kind::Piece).unwrap()
+                        .append(b"2").unwrap()
+                        .commit().unwrap().to_bytes()
+                ).unwrap()
+                .append(
+                    s.put(vblock::Kind::Piece).unwrap()
+                        .append(b"3").unwrap()
+                        .commit().unwrap().to_bytes()
+                ).unwrap()
+                .commit().unwrap().to_bytes()
+        ).unwrap()
+        .append(
+            s.put(vblock::Kind::Piece).unwrap()
+                .append(vblock::Kind::Piece.as_bytes()).unwrap()
+                .append(
+                    s.put(vblock::Kind::Piece).unwrap()
+                        .append(b"5").unwrap()
+                        .commit().unwrap().to_bytes()
+                ).unwrap()
+                .append(
+                    s.put(vblock::Kind::Piece).unwrap()
+                        .append(b"6").unwrap()
+                        .commit().unwrap().to_bytes()
+                ).unwrap()
+                .commit().unwrap().to_bytes()
+        ).unwrap()
+        .commit().unwrap();
+
+    let d = s.get_blob(&oid).expect("get failed").expect("object does not exist");
+
+    assert_eq!(d, b"2356");
+}
+
+#[test]
 fn blob_round_trip_empty() {
     let tdb = tempdir::TempDir::new(module_path!()).expect("failed to open tempdir");
     let s = vblock::Store::with_path(tdb.path()).expect("failed to open store");
