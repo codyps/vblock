@@ -31,6 +31,12 @@ use openat::{Dir,DirIter};
 /// TODO: right now oids/keys are tied to the disk format, consider allowing oids/keys that are
 /// related by aren't the direct hash of the vblock files. For example, allowing the hash of an
 /// entire file to be tracked may be useful.
+/// 
+/// TODO: blob multi-level formatting could be:
+/// 
+///  - balanced tree, with kind prefix in concatenated data of each level after 0th
+///  - unbalanced tree, with (kind,oid) pairs in the blob piece entries. This `kind` would control
+///    interpretation of data refered to by oid.
 pub struct Store {
     base: openat::Dir,
 }
@@ -87,6 +93,18 @@ impl Kind {
         let mut x = [0u8;8];
         byteorder::LittleEndian::write_u64(&mut x[..], self.raw());
         x
+    }
+
+    pub fn write_to<W: Write>(&self, mut w: W) -> io::Result<()>
+    {
+        w.write_all(&self.as_bytes()[..])
+    }
+
+    fn read_from<R: Read>(mut r: R) -> io::Result<Self>
+    {
+        let mut b = [0u8;8];
+        r.read_exact(&mut b)?;
+        Self::from_bytes(&b)
     }
 
     fn len() -> usize {
@@ -245,46 +263,108 @@ impl Store {
     ///    
     ///  - need a concrete model for how recursive blobs work. Ideally, we'd have a tree-like
     ///    setup, but specifics are needed
-    pub fn put_blob(&self, data: &[u8]) -> io::Result<Oid>
+    pub fn put_blob<A: AsRef<[u8]>>(&self, data: A) -> io::Result<Oid>
     {
+        self.put_blob_inner(Kind::Piece, data)
+    }
+
+    fn put_blob_inner<A: AsRef<[u8]>>(&self, kind: Kind, data: A) -> io::Result<Oid>
+    {
+        let data = data.as_ref();
+
         // build an object containing a list of pieces
         let mut pieces = vec![];
+        pieces.extend(kind.as_bytes().into_iter());
+        let mut have_pieces = false;
         let mut hr = hash_roll::bup::BupBuf::default();
 
         let mut data = data;
 
         loop {
             if data.len() == 0 {
-                if pieces.len() == 0 {
-                    return self.put_object(Kind::Piece, data);
-                } else {
+                if !have_pieces {
+                    // encode this as a piece directly
                     break;
+                } else {
+                    // no data, emit pieces
+                    return self.put_blob_inner(Kind::Blob, pieces)
                 }
             }
 
             let used = hr.push(data);
 
             let used = if used == 0 {
-                if pieces.len() == 0 {
-                    return self.put_object(Kind::Piece, data);
+                // all of `data` is a single piece
+                if !have_pieces {
+                    break;
                 } else {
                     data.len()
                 }
+            } else if used == data.len() && !have_pieces{
+                // all of `data` is a single piece
+                break;
             } else {
-                if used == data.len() && pieces.len() == 0 {
-                    return self.put_object(Kind::Piece, data);
-                } else {
-                    used
-                }
+                // `data` will be split further
+                used
             };
 
             let oid = self.put_object(Kind::Piece, data)?;
-            append_blob_oid(&mut pieces, oid, used);
+            pieces.extend(oid.to_bytes().into_iter());
+            have_pieces = true;
             data = &{data}[used..];
         }
 
-        // FIXME: pieces should also be split.
-        self.put_object(Kind::Blob, pieces)
+        self.put_object(Kind::Piece, data)
+    }
+
+    pub fn load_blob<R: Read>(&self, kind: Kind, mut o: R) -> io::Result<Option<Vec<u8>>>
+    {
+        match kind {
+            Kind::Blob => {
+                let mut data = vec![];
+                // sub-kind is how we should treat the next level of data we load
+                let sub_kind = Kind::read_from(&mut o)?;
+                match sub_kind {
+                    Kind::Blob => {
+                    },
+                    Kind::Piece => {
+                    }
+                    Kind::Tree => {
+                        // fast-path this error
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "Sub-kind Kind::Tree not allowed"));
+                    }
+                }
+
+                // resolve other items
+                // TODO: use the length field
+                loop {
+                    let pi = match read_piece_entry(&mut o)? {
+                        Some(v) => v,
+                        None => break,
+                    };
+                    
+                    let p = match self.get_blob(&pi.oid)? {
+                        Some(v) => v,
+                        None => return Err(io::Error::new(io::ErrorKind::InvalidData,
+                                            format!("missing object {:?}", pi.oid))),
+                    };
+
+                    data.extend(p);
+                }
+                
+                // FIXME: handle this incrimentally
+                self.load_blob(sub_kind, Cursor::new(data))
+            },
+            Kind::Piece => {
+                // direct data
+                let mut data = vec![];
+                o.read_to_end(&mut data)?;
+                Ok(Some(data))
+            },
+            Kind::Tree => {
+                Err(io::Error::new(io::ErrorKind::InvalidData, "Kind::Tree, not allowed"))
+            }
+        }
     }
 
     // TODO: logically, this should probably be handled by Object or similar directly, and allow us
@@ -295,53 +375,9 @@ impl Store {
                 Some(v) => v, None => return Ok(None),
         };
 
-        let mut data = vec![];
-        match o.kind() {
-            Kind::Blob => {
-                // resolve other items
-                // TODO: use the length field
-                let mut p = [0u8;76];
-                loop {
-                    // FIXME: this read() likely needs more checking to catch short reads.
-                    let l = o.read(&mut p)?;
-                    if l == 0 {
-                        break;
-                    }
-                    if l != 76 {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry read is {} instead of 76", l)));
-                    }
-
-                    let elen = p[0] as u16 | ((p[1] as u16) << 8);
-                    if elen != 76 {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry length is {} instead of 76", elen)));
-                    }
-
-                    let kind = p[2] as u16 | ((p[3] as u16) << 8);
-                    if kind != 1 {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, format!("piece entry kind is {} instead of 1", kind)))
-                    }
-
-                    let soid = Oid::from_bytes(&p[4..(4+64)]);
-
-                    let p = match self.get_blob(&soid)? {
-                        Some(v) => v,
-                        None => return Err(io::Error::new(io::ErrorKind::InvalidData,
-                                            format!("piece {:?} is missing for object {:?}", soid, oid))),
-                    };
-
-                    data.extend(p);
-                }
-            },
-            Kind::Piece => {
-                // direct data
-                o.read_to_end(&mut data)?;
-            },
-            Kind::Tree => {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{:?} has Kind::Tree, not allowed", oid)));
-            }
-        }
-
-        Ok(Some(data))
+        let kind = o.kind();
+        // FIXME: map error to include oid
+        self.load_blob(kind, o)
     }
 
     pub fn objects<'a>(&'a self) -> ObjectIter<'a>
@@ -350,28 +386,26 @@ impl Store {
     }
 }
 
-// TODO: move this into a Blob specific builder
-pub fn append_blob_oid(pieces: &mut Vec<u8>, oid: Oid, used: usize)
-{
-    pieces.extend(&[
-          // entry_len: u16 // 4 + 64 + 8 = 76
-          76, 0,
-          // kind: u16      // 1 = (oid: [u8;64], len: u64)
-          1,  0,
-    ][..]);
-    pieces.extend(oid.to_bytes());
-    pieces.extend(&[
-          used as u8,
-          (used >> 8) as u8,
-          (used >> 16) as u8,
-          (used >> 24) as u8,
-          (used >> 32) as u8,
-          (used >> 40) as u8,
-          (used >> 48) as u8,
-          (used >> 56) as u8
-    ][..]);
+struct PieceEntry {
+    oid: Oid,
 }
 
+fn read_piece_entry<R: Read>(mut r: R) -> io::Result<Option<PieceEntry>>
+{
+    let mut p = [0u8;64];
+
+    // FIXME: this read() likely needs more checking to catch short reads.
+    let l = r.read(&mut p)?;
+    if l == 0 {
+        return Ok(None);
+    }
+
+    let oid = Oid::from_bytes(&p[..64]);
+
+    Ok(Some(PieceEntry {
+        oid: oid
+    }))
+}
 
 pub struct ObjectBuilder<'a> {
     parent: &'a Store,
@@ -407,6 +441,11 @@ impl<'a> ObjectBuilder<'a> {
         };
         x.data.extend(x.kind.as_bytes().iter());
         Ok(x)
+    }
+
+    pub fn append<A: AsRef<[u8]>>(mut self, data: A) -> io::Result<Self> {
+       self.write_all(data.as_ref())?;
+       Ok(self)
     }
 
     pub fn commit(mut self) -> io::Result<Oid> {

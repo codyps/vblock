@@ -120,8 +120,9 @@ fn blob_get() {
     let oid2 = s.put_object(vblock::Kind::Piece, b"3").expect("insert object 2 failed");
 
     let mut p = vec![];
-    vblock::append_blob_oid(&mut p, oid1, 1);
-    vblock::append_blob_oid(&mut p, oid2, 1);
+    vblock::Kind::Piece.write_to(&mut p).unwrap();
+    p.extend(oid1.to_bytes());
+    p.extend(oid2.to_bytes());
 
     let oid_blob = s.put_object(vblock::Kind::Blob, p).expect("insert blob failed");
     
