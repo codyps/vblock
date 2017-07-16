@@ -1,4 +1,9 @@
 
+# Choices
+
+ - Use file names or use binary headers in files
+ - Use seperate files in 1 Oid directory or use single files with Oid name
+
 # Find where to split blocks
 
 ## Keywords & Terms:

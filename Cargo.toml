@@ -6,9 +6,12 @@ description = "Varible Length Block Store"
 
 [dependencies]
 hash-roll = { path = "../hash-roll", version = "0.2" }
-clap = "2.24"
+clap = "2"
 rand = "0.3"
-openat = { path = "../openat", version = "0.1" }
+openat = "0.1"
+hex = "0.2"
+sodalite = "0.2"
 
 [dev-dependencies]
 tempdir = "0.3"
+quickcheck = "0.4"

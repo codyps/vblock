@@ -1,3 +1,6 @@
+use ::std::ffi::CString;
+//use ::openat::Dir;
+
 fn to_cstr<P: ::openat::AsPath>(path: P) -> ::std::io::Result<P::Buffer> {
     path.to_path()
     .ok_or_else(|| {
@@ -6,8 +9,27 @@ fn to_cstr<P: ::openat::AsPath>(path: P) -> ::std::io::Result<P::Buffer> {
     })
 }
 
+/*
+struct TempDir {
+    dir: Dir,
+    path: CString,
+}
+
+impl TempDir {
+    pub fn as_dir(&self) -> &Dir {
+        &self.dir
+    }
+
+    pub fn path(&self) -> &CStr {
+        
+    }
+}
+*/
+
 pub trait DirVblockExt {
     fn create_dir_open<P: ::openat::AsPath>(&self, path: P) -> ::std::io::Result<Self>
+        where Self: Sized;
+    fn tempdir<P: ::openat::AsPath>(&self, prefix: P) -> ::std::io::Result<Self>
         where Self: Sized;
 }
 
@@ -42,6 +64,23 @@ impl DirVblockExt for ::openat::Dir {
             Ok(d1) => Ok(d1),
         }
     }
+
+    fn tempdir<P: ::openat::AsPath>(&self, prefix: P) -> ::std::io::Result<Self>
+    {
+        let n = tempdir_name(prefix); 
+        self.create_dir_open(n.as_ref())
+    }
+}
+
+// -> impl ::openat::AsPath
+fn tempdir_name<P: ::openat::AsPath>(prefix: P) -> CString
+{
+    use ::rand::Rng;
+    // FIXME: ideally, we'd avoid converting to cstring & then back again. Can optimize this.
+    let mut path = to_cstr(prefix).unwrap().as_ref().to_bytes().to_owned();
+    path.reserve(10);
+    path.extend(::rand::thread_rng().gen_ascii_chars().take(10).map(|x| x as u8));
+    CString::new(path).unwrap()
 }
 
 #[cfg(test)]
@@ -91,18 +130,50 @@ mod test {
 
     #[test]
     fn create_open_concurrent_race() {
+        use ::std::os::unix::ffi::OsStrExt;
         for _ in 0..500 {
             let tdb = tempdir::TempDir::new(module_path!()).unwrap();
             let mut join = vec![];
-            for _ in 0 ..8 {
+            for i in 0..10 {
                 let b = tdb.path().to_owned();
                 join.push(::std::thread::spawn(move || {
-                    let mut d = ::openat::Dir::open(&b).unwrap();
-                    check!(d.create_dir_open("a"));
+                    let d = ::openat::Dir::open(&b).unwrap();
+                    // TODO: check that if we create a file with the thread number as the file
+                    // name, at the end all exist.
+                    let d2 = check!(d.create_dir_open("a"));
+                    let n = format!("{}", i);
+                    let n2: &str = n.as_ref();
+                    d2.create_file(n2, 0o666).unwrap();
                 }));
             }
 
             join.drain(..).map(|join| join.join().unwrap()).count();
+
+            // Confirm file creation
+            let d = ::openat::Dir::open(tdb.path()).unwrap();
+            let mut found = [false;10];
+            for e in d.list_dir("a").unwrap() {
+                let e = e.unwrap();
+                let fna = e.file_name().as_bytes();
+                let fna = String::from_utf8(fna.to_owned()).unwrap();
+                let n = match fna.parse::<usize>() {
+                    Ok(v) => v,
+                    Err(e) => {
+                        panic!("{:?} is not an integer: {:?}", fna, e);
+                    }
+                };
+                if found[n] {
+                    panic!("found {} twice", n);
+                }
+
+                found[n] = true;
+            }
+
+            for (n, f) in found[..].iter().enumerate() {
+                if !f {
+                    panic!("did not find {}", n);
+                }
+            }
         }
     }
 }
