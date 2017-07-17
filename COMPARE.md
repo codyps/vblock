@@ -1,11 +1,11 @@
 
 
-| backup software/config   | delete            | dedup                | snap io cost | storage efficiency | bitrot resistance | auth |
-|--------------------------|-------------------|----------------------|--------------|--------------------|-------------------|------|
-| zfs snapshots + zfs send | any               | optional, global[^1] | none         | mid                | zfs scrub         |      |
-| zfs snapshots + rsync    | any               | optional, global[^1] | rsync scan   | mid                | zfs scrub         |      |
-| rsnapshot                | oldest only[^2]   | no                   | rsync scan   |                    |                   |      |
-| time machine             | automatic only[^3]|                      |              |                    |                   |      |
+| backup software/config   | delete            | dedup                | snap io cost | storage efficiency | bitrot resistance | data auth |
+|--------------------------|-------------------|----------------------|--------------|--------------------|-------------------|-----------|
+| zfs snapshots + zfs send | any               | optional, global[^1] | none         | mid                | zfs scrub         |           |
+| zfs snapshots + rsync    | any               | optional, global[^1] | rsync scan   | mid                | zfs scrub         |           |
+| rsnapshot                | oldest only[^2]   | no                   | rsync scan   |                    |                   |           |
+| time machine             | automatic only[^3]|                      |              |                    |                   |           |
 
 
 [^1]: zfs dedup in this context may not be quite as bad as using dedup in
