@@ -4,7 +4,9 @@ extern crate hex;
 extern crate sodalite;
 extern crate hash_roll;
 extern crate byteorder;
+extern crate fmt_extra;
 
+use fmt_extra::Hs;
 use byteorder::ByteOrder;
 use hash_roll::Split2;
 use std::ffi::{CString,CStr};
@@ -319,6 +321,7 @@ impl Store {
 
     pub fn load_blob<R: Read>(&self, kind: Kind, mut o: R) -> io::Result<Option<Vec<u8>>>
     {
+        println!("load blob: {:?}", kind);
         match kind {
             Kind::Blob => {
                 let mut data = vec![];
@@ -342,16 +345,27 @@ impl Store {
                         Some(v) => v,
                         None => break,
                     };
-                    
-                    let p = match self.get_blob(&pi.oid)? {
+
+                    println!("get-recursive {:?}", pi.oid);
+                    // XXX: we should only be getting pieces here based on our blob-splitting
+                    // strategy, but it might make sense to allow more flexible loading to
+                    // potentially support alternate splitting strategies in the future
+                    let p = match self.get(&pi.oid)? {
                         Some(v) => v,
                         None => return Err(io::Error::new(io::ErrorKind::InvalidData,
                                             format!("missing object {:?}", pi.oid))),
                     };
+                    if p.kind() != Kind::Piece {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData,
+                                                  format!("objects {:?} is a {:?}, only Piece allowed",
+                                                          pi.oid, p.kind())));
+                    }
+                    println!("get-recursive done {:?}", pi.oid);
 
-                    data.extend(p);
+                    data.extend(p.as_ref());
                 }
-                
+
+                println!("load-recursive: {:?}", Hs(&data));
                 // FIXME: handle this incrimentally
                 self.load_blob(sub_kind, Cursor::new(data))
             },
@@ -469,13 +483,13 @@ impl<'a> std::io::Write for ObjectBuilder<'a> {
         self.data.flush()
     }
 }
-    
+
 /// An object that exists in the `Store`
 pub struct Object<'a> {
     parent: &'a Store,
     oid: Oid,
     kind: Kind,
-    
+
     // Consider if we even need this. May be better just to use cached value, which we read on
     // creation anyhow to check hash.
     file: Cursor<Vec<u8>>,
@@ -522,6 +536,15 @@ impl<'a> Object<'a> {
 
     pub fn oid(&self) -> &Oid {
         &self.oid
+    }
+}
+
+impl<'a> std::convert::AsRef<[u8]> for Object<'a>
+{
+    fn as_ref(&self) -> &[u8]
+    {
+        let x: &[u8] = self.file.get_ref().as_ref();
+        &x[8..]
     }
 }
 
