@@ -1,10 +1,10 @@
 
 
-| backup software/config   | delete          | dedup        | scan cost | storage efficiency | bitrot resistance | auth |
-|--------------------------|-----------------|--------------|-----------|--------------------|-------------------|------|
-| zfs snapshots + zfs send | any             | optional[^1] | none      | mid                | zfs scrub         |      |
-| zfs snapshots + rsync    | any             | optional[^1] | rsync scan| mid                | zfs scrub         |      |
-| rsnapshot                | oldest only[^2] | no           |           |                    |                   |      |
+| backup software/config   | delete          | dedup        | snap io cost | storage efficiency | bitrot resistance | auth |
+|--------------------------|-----------------|--------------|--------------|--------------------|-------------------|------|
+| zfs snapshots + zfs send | any             | optional[^1] | none         | mid                | zfs scrub         |      |
+| zfs snapshots + rsync    | any             | optional[^1] | rsync scan   | mid                | zfs scrub         |      |
+| rsnapshot                | oldest only[^2] | no           | rsync scan   |                    |                   |      |
 
 [^1]: zfs dedup in this context may not be quite as bad as using dedup in
   general. Can restrict to just the backup dataset.
