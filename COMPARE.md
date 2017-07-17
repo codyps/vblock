@@ -1,13 +1,17 @@
 
 
-| backup software/config   | delete          | dedup        | snap io cost | storage efficiency | bitrot resistance | auth |
-|--------------------------|-----------------|--------------|--------------|--------------------|-------------------|------|
-| zfs snapshots + zfs send | any             | optional[^1] | none         | mid                | zfs scrub         |      |
-| zfs snapshots + rsync    | any             | optional[^1] | rsync scan   | mid                | zfs scrub         |      |
-| rsnapshot                | oldest only[^2] | no           | rsync scan   |                    |                   |      |
+| backup software/config   | delete            | dedup                | snap io cost | storage efficiency | bitrot resistance | auth |
+|--------------------------|-------------------|----------------------|--------------|--------------------|-------------------|------|
+| zfs snapshots + zfs send | any               | optional, global[^1] | none         | mid                | zfs scrub         |      |
+| zfs snapshots + rsync    | any               | optional, global[^1] | rsync scan   | mid                | zfs scrub         |      |
+| rsnapshot                | oldest only[^2]   | no                   | rsync scan   |                    |                   |      |
+| time machine             | automatic only[^3]|                      |              |                    |                   |      |
+
 
 [^1]: zfs dedup in this context may not be quite as bad as using dedup in
   general. Can restrict to just the backup dataset.
 
 [^2]: rsnapshot uses reverse diffs & does not provide a way to "expand" an
   intermediate reverse diff when deleting an intermediate snapshot
+
+[^3]: [apple documents](https://support.apple.com/en-us/HT201250) that time machine keeps hourly backups for 24hrs, daily backups for a month, and weekly backups for anything older than that. It then deletes the oldest backups first when the backup drive is full.
