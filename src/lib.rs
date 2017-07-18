@@ -203,7 +203,7 @@ impl Store {
         // TODO: consider allowing configurable levels for key-splitting.
         let l = self.split_ct();
         let mut d = Vec::with_capacity(l);
-        d.push(self.base.create_dir_open(&key.get_part(0))?);
+        d.push(self.objects.create_dir_open(&key.get_part(0))?);
 
         for i in 1..(l-1) {
             let n = d[i-1].create_dir_open(&key.get_part(i))?;
