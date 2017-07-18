@@ -3,7 +3,7 @@
 | backup software/config   | delete            | dedup in snapshots   | dedup between snaps   |snap atomicity | snap io cost | storage efficiency | bitrot resistance | data auth |
 |--------------------------|-------------------|----------------------|-----------------------|----------------|--------------|--------------------|-------------------|-----------|
 | zfs snapshots + zfs send | any               | optional, global[^1] | optional, via zfs     | fs via zfs     | none         | mid                | zfs scrub         |           |
-| zfs snapshots + rsync    | any               | optional, global[^1] | optional, via zfs     | fs via zfs     | rsync scan   | mid                | zfs scrub         |           |
+| rsync + zfs snapshots    | any               | optional, global[^1] | optional, via zfs     | fs via zfs     | rsync scan   | mid                | zfs scrub         |           |
 | rsnapshot                | oldest only[^2]   | no                   | reverse diffs         | none           | rsync scan   |                    |                   |           |
 | time machine             | automatic only[^3]| no                   | file & dir hard links | ?              | ?            |                   |           |
 
