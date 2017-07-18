@@ -8,8 +8,7 @@
 | time machine             | automatic only[^3]| no                   | file & dir hard links | ?              | ?            |                   |           |
 
 
-[^1]: zfs dedup in this context may not be quite as bad as using dedup in
-  general. Can restrict to just the backup dataset.
+[^1]: zfs deduplication is done on records, which are sized according to the content of the data they contain. In other words, the splitting is not content aware. zfs dedup is considered to be high-overhead, and constrains write performance. Unclear if this is a problem in a restricted backup usecase. Can restrict dedup to just the backup dataset (leaving other zfs use unaffected).
 
 [^2]: rsnapshot uses reverse diffs & does not provide a way to "expand" an
   intermediate reverse diff when deleting an intermediate snapshot
