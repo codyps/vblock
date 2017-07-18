@@ -9,6 +9,7 @@ use byteorder::ByteOrder;
 use hash_roll::Split2;
 use std::ffi::{CString,CStr};
 use std::io::Seek;
+use hex::{FromHex,ToHex};
 
 mod fs;
 use std::io::Read;
@@ -39,19 +40,7 @@ use openat::{Dir,DirIter};
 ///    interpretation of data refered to by oid.
 pub struct Store {
     base: openat::Dir,
-}
-
-/// Object Identifier
-///
-/// Very much like git, every object in a vblock store has a identifier that corresponds to it's
-/// value.
-///
-// FIXME: we really want this to be both a series of bytes & a cstr.
-//  - CStr is used for file paths
-//  - bytes are used for file contents
-#[derive(Debug,Eq,PartialEq,Clone)]
-pub struct Oid {
-    inner: ::std::ffi::CString,
+    objects: openat::Dir,
 }
 
 /// Data stored has a given kind which controls it's interpretation
@@ -112,30 +101,31 @@ impl Kind {
     }
 }
 
-impl Oid {
-    pub fn from_hex(key: &str) -> Result<Self,()> {
-        let mut nh = Vec::with_capacity(key.len() + 1);
-        let hv = b"0123456789abcdef";
-        let hvu = b"ABCDEF";
-        for c in key.as_bytes() {
-            if hv.contains(c) {
-                nh.push(*c)
-            } else if hvu.contains(c) {
-                nh.push(*c + (b'a' - b'A'))
-            } else {
-                return Err(())
-            }
-        }
+/// Object Identifier
+///
+/// Very much like git, every object in a vblock store has a identifier that corresponds to it's
+/// value.
+///
+// FIXME: we really want this to be both a series of bytes & a cstr.
+//  - CStr is used for file paths
+//  - bytes are used for file contents
+#[derive(Debug,Eq,PartialEq,Clone)]
+pub struct Oid {
+    inner: Vec<u8>,
+}
 
+impl Oid {
+    pub fn from_hex(key: &str) -> Result<Self,hex::FromHexError> {
         Ok(Oid {
-            inner: ::std::ffi::CString::new(nh).unwrap()
+            inner: ::hex::FromHex::from_hex(key)?
         })
     }
 
-    pub fn from_bytes<A: AsRef<[u8]>>(key: A) -> Self {
+    pub fn from_bytes<A: Into<Vec<u8>>>(key: A) -> Self
+    {
         // TODO: instead of converting & allocating, provide a view in hex?
         Oid {
-            inner: ::std::ffi::CString::new(::hex::ToHex::to_hex(&key)).unwrap()
+            inner: key.into()
         }
     }
 
@@ -147,18 +137,30 @@ impl Oid {
 
     /// TODO: this is very Index like, see if we can make that usable.
     fn get_part(&self, index: usize) -> OidPart {
-        let v = [self.inner.as_bytes()[index]];
-        OidPart { inner: CString::new(&v[..]).unwrap() }
+        OidPart { inner: CString::new([self.as_ref()[index]].to_hex()).unwrap() }
     }
 
     /// TODO: this is very Index like, see if we can make that usable.
     fn get_part_rem(&self, index_start: usize) -> OidPart {
-        let v = &self.inner.as_bytes()[index_start..];
-        OidPart { inner: CString::new(v).unwrap() }
+        OidPart { inner: CString::new((&self.as_ref()[index_start..]).to_hex()).unwrap() }
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        ::hex::FromHex::from_hex(&self.inner.as_bytes()).unwrap()
+    pub fn as_bytes(&self) -> &[u8] {
+        self.inner.as_ref()
+    }
+
+    fn len_str() -> usize {
+        Self::len() * 2
+    }
+
+    fn len() -> usize {
+        sodalite::HASH_LEN
+    }
+}
+
+impl AsRef<[u8]> for Oid {
+    fn as_ref(&self) -> &[u8] {
+        self.inner.as_ref()
     }
 }
 
@@ -173,23 +175,19 @@ impl<'a> openat::AsPath for &'a OidPart {
     }
 }
 
-impl<'a> openat::AsPath for &'a Oid {
-    type Buffer = &'a CStr;
-    fn to_path(self) -> Option<Self::Buffer> {
-        Some(self.inner.as_ref())
-    }
-}
-
 impl Store {
-    pub fn with_dir(d: openat::Dir) -> Self {
-        Store {
-            base: d
-        }
+    pub fn with_dir(d: openat::Dir) -> io::Result<Self> {
+        let o = d.create_dir_open("objects")?;
+
+        Ok(Store {
+            base: d,
+            objects: o,
+        })
     }
 
     pub fn with_path<P: openat::AsPath>(p: P) -> io::Result<Self> {
         let d = ::openat::Dir::open(p)?;
-        Ok(Self::with_dir(d))
+        Self::with_dir(d)
     }
 
     pub fn dir(&self) -> &::openat::Dir {
@@ -314,7 +312,7 @@ impl Store {
             };
 
             let oid = self.put_object(Kind::Piece, &data[..used])?;
-            pieces.extend(oid.to_bytes().into_iter());
+            pieces.extend(oid.as_bytes());
             have_pieces = true;
             data = &{data}[used..];
         }
@@ -485,7 +483,7 @@ impl<'a> std::io::Write for ObjectBuilder<'a> {
 
 /// An object that exists in the `Store`
 pub struct Object<'a> {
-    parent: &'a Store,
+    _parent: &'a Store,
     oid: Oid,
     kind: Kind,
 
@@ -522,7 +520,7 @@ impl<'a> Object<'a> {
         c.set_position(8);
 
         Ok(Some(Object {
-            parent: parent,
+            _parent: parent,
             oid: oid,
             kind: kind,
             file: c,
@@ -557,7 +555,7 @@ impl<'a> std::io::Read for Object<'a> {
 pub struct ObjectIter<'a> {
     parent: &'a Store,
     iters: Vec<DirIter>,
-    dirs: Vec<Dir>,
+    dirs: Vec<(Dir,CString)>,
 }
 
 impl<'a> ObjectIter<'a> {
@@ -577,7 +575,7 @@ impl<'a> ObjectIter<'a> {
             self.parent.dir()
         } else {
             self.dirs.last().unwrap();
-        }
+        };
 
         loop {
             let iter = self.iters.last().unwrap();
@@ -587,15 +585,17 @@ impl<'a> ObjectIter<'a> {
                     match v.simple_type() {
                         Some(SimpleType::Dir) => {
                             /* Go deeper */
-                            let nd = cd.sub_dir(v.file_name())?;
+                            let sub_name = v.file_name()?;
+                            let nd = cd.sub_dir(sub_name)?;
                             let ndi = nd.list_dir()?;
                             self.iters.push(ndi);
-                            self.dirs.push(nd);
+                            self.dirs.push((nd, sub_name));
                             continue;
                         },
 
                         Some(SimpleType::File) => {
-                            // Could be an object
+                            // found an object
+                            let mut name = Vec::with_capacity(CString::from_vec(
 
                         }
 
@@ -614,7 +614,7 @@ impl<'a> ObjectIter<'a> {
             }
         }
     }
-    */
+*/
 }
 
 impl<'a> Iterator for ObjectIter<'a> {

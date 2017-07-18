@@ -77,7 +77,7 @@ fn object_put() {
     s.put_object(vblock::Kind::Piece, b"data").expect("failed to insert object");
     println!("{}", PrintDirRec::new(s.dir(), CStr::from_bytes_with_nul(b".\0").unwrap()));
     let oid = CStr::from_bytes_with_nul(
-        b"5/e/7/3/a68dec8dd148419b366b51ae24332b62aed50fcb9a0c8f759cde90394db7e73ccc6eb08f86534bece2439a07723bbc5619b116681a0b563455e53e45651b\0"
+        b"5e/73/a6/8d/ec8dd148419b366b51ae24332b62aed50fcb9a0c8f759cde90394db7e73ccc6eb08f86534bece2439a07723bbc5619b116681a0b563455e53e45651b\0"
     ).unwrap();
     let mut f = s.dir().open_file(oid).expect("could not open data file");
     let mut d = vec![];
@@ -123,8 +123,8 @@ fn blob_get() {
 
     let mut p = vec![];
     vblock::Kind::Piece.write_to(&mut p).unwrap();
-    p.extend(oid1.to_bytes());
-    p.extend(oid2.to_bytes());
+    p.extend(oid1.as_bytes());
+    p.extend(oid2.as_bytes());
 
     let oid_blob = s.put_object(vblock::Kind::Blob, p).expect("insert blob failed");
     
@@ -151,14 +151,14 @@ fn blob_get_3_level() {
                 .append(
                     s.put(vblock::Kind::Piece).unwrap()
                         .append(b"2").unwrap()
-                        .commit().unwrap().to_bytes()
+                        .commit().unwrap().as_bytes()
                 ).unwrap()
                 .append(
                     s.put(vblock::Kind::Piece).unwrap()
                         .append(b"3").unwrap()
-                        .commit().unwrap().to_bytes()
+                        .commit().unwrap().as_bytes()
                 ).unwrap()
-                .commit().unwrap().to_bytes()
+                .commit().unwrap().as_bytes()
         ).unwrap()
         .append(
             s.put(vblock::Kind::Piece).unwrap()
@@ -167,14 +167,14 @@ fn blob_get_3_level() {
                 .append(
                     s.put(vblock::Kind::Piece).unwrap()
                         .append(b"5").unwrap()
-                        .commit().unwrap().to_bytes()
+                        .commit().unwrap().as_bytes()
                 ).unwrap()
                 .append(
                     s.put(vblock::Kind::Piece).unwrap()
                         .append(b"6").unwrap()
-                        .commit().unwrap().to_bytes()
+                        .commit().unwrap().as_bytes()
                 ).unwrap()
-                .commit().unwrap().to_bytes()
+                .commit().unwrap().as_bytes()
         ).unwrap()
         .commit().unwrap();
 
