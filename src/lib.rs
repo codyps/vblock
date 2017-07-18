@@ -4,9 +4,7 @@ extern crate hex;
 extern crate sodalite;
 extern crate hash_roll;
 extern crate byteorder;
-extern crate fmt_extra;
 
-use fmt_extra::Hs;
 use byteorder::ByteOrder;
 use hash_roll::Split2;
 use std::ffi::{CString,CStr};
@@ -270,6 +268,9 @@ impl Store {
         self.put_blob_inner(Kind::Piece, data)
     }
 
+    ///
+    /// The `data` represents an object with `Kind` `kind`.
+    ///
     fn put_blob_inner<A: AsRef<[u8]>>(&self, kind: Kind, data: A) -> io::Result<Oid>
     {
         let data = data.as_ref();
@@ -286,6 +287,8 @@ impl Store {
             if data.len() == 0 {
                 if !have_pieces {
                     // encode this as a piece directly
+                    // XXX: only top level objects should be empty, avoid blob-leaves having zero
+                    // size.
                     break;
                 } else {
                     // no data, emit pieces
@@ -302,7 +305,7 @@ impl Store {
                 } else {
                     data.len()
                 }
-            } else if used == data.len() && !have_pieces{
+            } else if used == data.len() && !have_pieces {
                 // all of `data` is a single piece
                 break;
             } else {
@@ -310,18 +313,17 @@ impl Store {
                 used
             };
 
-            let oid = self.put_object(Kind::Piece, data)?;
+            let oid = self.put_object(Kind::Piece, &data[..used])?;
             pieces.extend(oid.to_bytes().into_iter());
             have_pieces = true;
             data = &{data}[used..];
         }
 
-        self.put_object(Kind::Piece, data)
+        self.put_object(kind, data)
     }
 
     pub fn load_blob<R: Read>(&self, kind: Kind, mut o: R) -> io::Result<Option<Vec<u8>>>
     {
-        println!("load blob: {:?}", kind);
         match kind {
             Kind::Blob => {
                 let mut data = vec![];
@@ -346,7 +348,6 @@ impl Store {
                         None => break,
                     };
 
-                    println!("get-recursive {:?}", pi.oid);
                     // XXX: we should only be getting pieces here based on our blob-splitting
                     // strategy, but it might make sense to allow more flexible loading to
                     // potentially support alternate splitting strategies in the future
@@ -360,12 +361,10 @@ impl Store {
                                                   format!("objects {:?} is a {:?}, only Piece allowed",
                                                           pi.oid, p.kind())));
                     }
-                    println!("get-recursive done {:?}", pi.oid);
 
                     data.extend(p.as_ref());
                 }
 
-                println!("load-recursive: {:?}", Hs(&data));
                 // FIXME: handle this incrimentally
                 self.load_blob(sub_kind, Cursor::new(data))
             },
@@ -385,7 +384,7 @@ impl Store {
     // to seek & so forth.
     pub fn get_blob(&self, oid: &Oid) -> io::Result<Option<Vec<u8>>>
     {
-        let mut o = match self.get(oid)? {
+        let o = match self.get(oid)? {
                 Some(v) => v, None => return Ok(None),
         };
 

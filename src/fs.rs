@@ -72,6 +72,23 @@ impl DirVblockExt for ::openat::Dir {
     }
 }
 
+/*
+struct TempDir {
+    // these 2 items are so we can unlink the existing dir
+    parent: Dir,
+    path: Path,
+
+    this: Dir,
+}
+
+struct TempFile {
+    parent: Dir,
+    path: Path,
+
+    this: File,
+}
+*/
+
 // -> impl ::openat::AsPath
 fn tempdir_name<P: ::openat::AsPath>(prefix: P) -> CString
 {

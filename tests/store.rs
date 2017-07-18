@@ -3,7 +3,9 @@ extern crate openat;
 extern crate vblock;
 extern crate rand;
 extern crate quickcheck;
+extern crate fmt_extra;
 
+use fmt_extra::Hs;
 use openat::Dir;
 use std::ffi::{CStr, CString};
 use ::std::os::unix::ffi::OsStrExt;
@@ -54,7 +56,7 @@ impl<'a> ::std::fmt::Display for PrintDirRec<'a> {
                             let mut b = vec![];
                             let mut f = self.d.open_file(fna).map_err(|_| ::std::fmt::Error)?;
                             f.read_to_end(&mut b).map_err(|_| std::fmt::Error)?;
-                            write!(fmt, " > {:?}\n", b)?;
+                            write!(fmt, " > {:?}\n", Hs(b))?;
                         },
                         _ => {}
                     }
@@ -138,7 +140,7 @@ fn blob_get_3_level() {
 
     // oid_t -> [B oid_1 oid_2] -> [P oid_l1[0], oid_l1[1]] -> "2"
     //                                                      -> "3"
-    //                          -> [P oid_l2[0], oid_l2[1]] -> "5"
+    //                          -> [  oid_l2[0], oid_l2[1]] -> "5"
     //                                                      -> "6"
     
     let oid = s.put(vblock::Kind::Blob).unwrap()
@@ -160,7 +162,8 @@ fn blob_get_3_level() {
         ).unwrap()
         .append(
             s.put(vblock::Kind::Piece).unwrap()
-                .append(vblock::Kind::Piece.as_bytes()).unwrap()
+                // FIXME: consider if adding this is appropriate to allow differently shaped trees
+                // .append(vblock::Kind::Piece.as_bytes()).unwrap()
                 .append(
                     s.put(vblock::Kind::Piece).unwrap()
                         .append(b"5").unwrap()
@@ -199,7 +202,7 @@ fn blob_rt<A: AsRef<[u8]>>(a: A)
     let oid = s.put_blob(&a).expect("put failed");
     println!("{}", PrintDirRec::new(s.dir(), CStr::from_bytes_with_nul(b".\0").unwrap()));
     let rt_data = s.get_blob(&oid).expect("get failed").expect("object does not exist");
-    assert_eq!(a,&rt_data[..]);
+    assert_eq!(Hs(a),Hs(&rt_data[..]));
 }
 
 #[test]
