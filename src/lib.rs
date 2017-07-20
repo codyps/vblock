@@ -5,6 +5,9 @@ extern crate sodalite;
 extern crate hash_roll;
 extern crate byteorder;
 
+#[macro_use]
+extern crate log;
+
 use byteorder::ByteOrder;
 use hash_roll::Split2;
 use std::ffi::{CString,CStr};
@@ -200,7 +203,9 @@ impl Store {
     }
 
     fn object_dir(&self, key: &Oid) -> io::Result<Dir> {
-        // TODO: consider allowing configurable levels for key-splitting.
+        // TODO: consider allowing configurable levels for key-splitting.  Right now, we tie object
+        // lookup to the specific form here. If we allow adjusting this we'll need to either
+        // provide a conversion tool or do inteligent probing.
         let l = self.split_ct();
         let mut d = Vec::with_capacity(l);
         d.push(self.objects.create_dir_open(&key.get_part(0))?);
@@ -218,11 +223,6 @@ impl Store {
         key.get_part_rem(self.split_ct())
     }
 
-    /// TODO: consider multi-(name,data) API
-    /// TODO: consider data being sourced incrimentally
-    ///
-    /// Note: `key` and `name` should only need to be valid `Path` fragments (`OsString`s). The
-    /// restriction to `str` here could be lifted if needed.
     pub fn put_object<A: AsRef<[u8]>>(&self, kind: Kind, data: A) -> io::Result<Oid>
     {
         let mut o = self.put(kind)?;
@@ -395,6 +395,7 @@ impl Store {
     {
         ObjectIter::new(self)
     }
+
 }
 
 struct PieceEntry {
@@ -505,6 +506,14 @@ impl<'a> Object<'a> {
             Ok(v) => v,
         };
 
+        match Self::from_oid_and_data(parent, oid, f) {
+            Ok(v) => Ok(Some(v)),
+            Err(e) => Err(e)
+        }
+    }
+
+    fn from_oid_and_data<R: Read + Seek>(parent: &'a Store, oid: Oid, mut f: R) -> io::Result<Self>
+    {
         let mut b = vec![];
         f.read_to_end(&mut b)?;
         f.seek(io::SeekFrom::Start(Kind::len() as u64))?;
@@ -519,12 +528,12 @@ impl<'a> Object<'a> {
         let mut c = Cursor::new(b);
         c.set_position(8);
 
-        Ok(Some(Object {
+        Ok(Object {
             _parent: parent,
             oid: oid,
             kind: kind,
             file: c,
-        }))
+        })
     }
 
     pub fn kind(&self) -> Kind {
@@ -555,7 +564,13 @@ impl<'a> std::io::Read for Object<'a> {
 pub struct ObjectIter<'a> {
     parent: &'a Store,
     iters: Vec<DirIter>,
-    dirs: Vec<(Dir,CString)>,
+    dirs: Vec<(Dir,u8)>,
+}
+
+fn to_hex(d: u8) -> [u8;2]
+{
+        static CHARS: &'static [u8] = b"0123456789abcdef";
+        [CHARS[(d >> 4) as usize], CHARS[(d & 0xf) as usize]]
 }
 
 impl<'a> ObjectIter<'a> {
@@ -568,11 +583,11 @@ impl<'a> ObjectIter<'a> {
         }
     }
 
-    /*
+    #[cfg(disabled)]
     fn next_inner(&mut self) -> io::Result<Option<Object<'a>>> {
-        let cd = if iters.empty() {
+        let cd = if self.iters.empty() {
             self.iters.push(self.parent.list_dir()?);
-            self.parent.dir()
+            self.parent.objects
         } else {
             self.dirs.last().unwrap();
         };
@@ -584,22 +599,76 @@ impl<'a> ObjectIter<'a> {
                 Some(Ok(v)) => {
                     match v.simple_type() {
                         Some(SimpleType::Dir) => {
-                            /* Go deeper */
+                            // If path looks like a byte, go deeper
                             let sub_name = v.file_name()?;
+                            if sub_name.len() != 2 {
+                                continue;
+                            }
+
+                            let sub_val = match hex::FromHex::from_hex(sub_name) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    debug!("Dir skipped: not hex: '{:?}' : {:?}", sub_name, e);
+                                    continue
+                                }
+                            };
+
+                            assert!(sub_val.len() == 1);
+
                             let nd = cd.sub_dir(sub_name)?;
                             let ndi = nd.list_dir()?;
                             self.iters.push(ndi);
-                            self.dirs.push((nd, sub_name));
+                            self.dirs.push((nd, sub_val[0]));
                             continue;
                         },
 
                         Some(SimpleType::File) => {
                             // found an object
-                            let mut name = Vec::with_capacity(CString::from_vec(
 
-                        }
+                            // check that length is sensible
+                            let sub_name = v.file_name()?;
+                            if sub_name.len() + (self.dirs.len() * 2) != Oid::len_str() {
+                                // length of would-be oid doesn't match our Oid length
+                                debug!("File skipped: length mismatch: '{:?}', {}, {}",
+                                       sub_name, self.dirs.len(), Oid::len_str());
+                                continue;
+                            }
 
-                        Some(_),None => {
+                            // TODO: parse without generating hex string
+                            let mut name = Vec::with_capacity(Oid::len_str());
+                            for l in self.dirs {
+                                name.extend(to_hex(l.1));
+                            }
+
+                            name.extend(sub_name);
+                            let oid = match Oid::from_hex(name) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    debug!("File skipped: '{}', {:?}", name, e);
+                                    continue
+                                }
+                            };
+
+                            let f = match nd.open_file(sub_name) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    debug!("File was detected but not openable: '{}', {:?}", sub_name, e);
+                                    continue;
+                                }
+                            };
+
+                            let o = match Object::from_oid_and_data(self.parent, oid, f) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    debug!("File was opened but could not be loaded as an object: '{}', {:?}", sub_name, e);
+                                    continue;
+                                }
+                            };
+
+                            return Some(Ok(o))
+                        },
+
+                        Some(_)|None => {
                             // TODO: probe further, but for now assume we don't care and should look at
                             // the next entry.
                         }
@@ -614,7 +683,6 @@ impl<'a> ObjectIter<'a> {
             }
         }
     }
-*/
 }
 
 impl<'a> Iterator for ObjectIter<'a> {

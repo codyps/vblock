@@ -13,6 +13,7 @@ hex = "0.2"
 sodalite = "0.2"
 byteorder = "1"
 fmt-extra = "0.1"
+log = "*"
 
 [dev-dependencies]
 tempdir = "0.3"
