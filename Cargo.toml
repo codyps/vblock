@@ -9,7 +9,7 @@ hash-roll = { git = "https://github.com/jmesmon/hash-roll", version = "0.2" }
 clap = "2"
 rand = "0.3"
 openat = "0.1"
-hex = "0.2"
+hex = "0.3"
 sodalite = "0.2"
 byteorder = "1"
 fmt-extra = "0.1"
