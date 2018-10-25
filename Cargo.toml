@@ -16,4 +16,4 @@ fmt-extra = "0.1"
 
 [dev-dependencies]
 tempdir = "0.3"
-quickcheck = "0.4"
+quickcheck = "0.7"
